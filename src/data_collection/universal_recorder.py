@@ -2,16 +2,15 @@
 Universal Excel Telemetry Recorder: Bộ ghi nhận thao tác Excel chuyên sâu chạy ngầm.
 Dành cho phòng máy học tập & Nghiên cứu hành vi:
 - Chỉ bắt đầu ghi nhận KHI VÀ CHỈ KHI người học MỞ FILE EXCEL.
-- KHÔNG bắt tín hiệu chuột liên tiếp hay làm rác luồng sự kiện.
-- Ghi nhận chính xác LỊCH SỬ THAO TÁC:
-  + Địa chỉ ô được chọn (CELL_SELECTION: ví dụ C8, J10, A1:B10)
-  + Nhập liệu giá trị (CELL_VALUE_CHANGE: "Hello", "xin chào", số liệu...)
-  + Gõ công thức hàm (FORMULA_ENTRY: =IF(...), =VLOOKUP(...), =SUM(...))
-  + Tên công cụ / Ribbon / Định dạng (EXCEL_TOOL_USED: Tab Home, Tab Insert, Bold, Tô màu, Đổi Font...)
-  + Mở bảng tính / Đổi Sheet (WORKBOOK_OPEN, SHEET_ACTIVATE)
-  + Tạm dừng suy nghĩ kéo dài tại ô (STUDENT_PAUSE: khi dừng > 8s tại một ô)
-- Tự động xuất mọi lỗi phát sinh ra log file và màn hình console.
-- Đồng bộ tức thì trực tiếp vào Supabase Cloud (WebSockets Realtime) & MySQL.
+- KHÔNG dùng bất kỳ hook hệ thống hay hook chuột nào can thiệp OS (chuột hoàn toàn mượt mà, an toàn 100%).
+- Bắn log trực tiếp lên màn hình terminal để dễ dàng theo dõi theo thời gian thực:
+  + Địa chỉ ô được chọn: 🎯 [CHỌN ĐỊA CHỈ Ô]: [C8]
+  + Nhập liệu giá trị: ✍️ [NHẬP NỘI DUNG]: Ô [C8] = "Hello"
+  + Gõ công thức hàm: ⚡ [GÕ CÔNG THỨC]: Ô [C8] = =SUM(A1:A5)
+  + Tên công cụ / Định dạng: 🛠️ [CÔNG CỤ EXCEL]: In đậm chữ (Bold) tại ô [C8]
+  + Mở bảng tính / Đổi Sheet: 📂 [MỞ BẢNG TÍNH], 📑 [CHUYỂN SHEET]
+  + Tạm dừng suy nghĩ tại ô: ⏱️ [TẠM DỪNG / SUY NGHĨ]: Dừng 8.1s tại ô [C8]
+- Tự động đồng bộ vào Supabase Cloud (WebSockets Realtime) & MySQL.
 """
 
 import os
@@ -25,8 +24,6 @@ if sys.platform == "win32":
 import time
 import socket
 import threading
-import ctypes
-import ctypes.wintypes
 from typing import Any, Dict, Optional, Set
 
 # Thiết lập đường dẫn thư mục gốc
@@ -43,50 +40,6 @@ try:
     import uiautomation as auto
 except Exception:
     auto = None
-
-# Ctypes Windows Accessibility & Mouse Hook Constants
-user32 = ctypes.windll.user32
-oleacc = ctypes.windll.oleacc
-
-EVENT_OBJECT_FOCUS = 0x8005
-EVENT_OBJECT_SELECTION = 0x8006
-EVENT_OBJECT_STATECHANGE = 0x800A
-EVENT_OBJECT_NAMECHANGE = 0x800C
-EVENT_OBJECT_INVOKED = 0x8013
-WINEVENT_OUTOFCONTEXT = 0
-
-WH_MOUSE_LL = 14
-WM_LBUTTONUP = 0x0202
-
-class POINT(ctypes.Structure):
-    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-
-class MSLLHOOKSTRUCT(ctypes.Structure):
-    _fields_ = [
-        ("pt", POINT),
-        ("mouseData", ctypes.wintypes.DWORD),
-        ("flags", ctypes.wintypes.DWORD),
-        ("time", ctypes.wintypes.DWORD),
-        ("dwExtraInfo", ctypes.c_ulonglong),
-    ]
-
-WinEventProcType = ctypes.WINFUNCTYPE(
-    None,
-    ctypes.wintypes.HANDLE,
-    ctypes.wintypes.DWORD,
-    ctypes.wintypes.HWND,
-    ctypes.wintypes.LONG,
-    ctypes.wintypes.LONG,
-    ctypes.wintypes.DWORD,
-    ctypes.wintypes.DWORD
-)
-
-LowLevelMouseProc = ctypes.WINFUNCTYPE(
-    ctypes.c_long,
-    ctypes.c_int,
-    ctypes.wintypes.WPARAM,
-    ctypes.wintypes.LPARAM
-)
 
 
 def clean_address(raw_obj) -> str:
@@ -120,13 +73,13 @@ class UniversalExcelRecorder:
         self.current_cell = ""
         self.current_tool = ""
 
-        # Trạng thái theo dõi Excel
+        # Trạng thái hoạt động
         self._running = False
         self._excel_active = False
         self._com_thread = None
-        self._hook_thread = None
+        self._ribbon_thread = None
 
-        # Bộ nhớ đệm lưu trạng thái để so khớp thay đổi
+        # Bộ nhớ đệm lưu trạng thái ô và thao tác
         self._last_sel = None
         self._last_wb_sel = None
         self._last_sheet_sel = None
@@ -137,26 +90,20 @@ class UniversalExcelRecorder:
         self._is_editing = False
 
         self._cell_values = {}      # key: (wb, sheet, cell) -> (val_str, formula_str)
-        self._cell_formats = {}     # key: (wb, sheet, cell) -> tuple of format properties
+        self._cell_formats = {}     # key: (wb, sheet, cell) -> tuple format
         self._last_action_time = time.time()
         self._pause_logged_for_cell = None
 
-        # Bộ lọc chống trùng sự kiện Ribbon trong thời gian ngắn
+        # Bộ nhớ chống lặp sự kiện Ribbon
         self._last_ribbon_tool = ""
         self._last_ribbon_time = 0
 
-        # Lưu giữ con trỏ callback để tránh bị Garbage Collector thu hồi
-        self._win_event_proc = None
-        self._win_event_hook = None
-        self._mouse_proc = None
-        self._mouse_hook = None
-
     def log_error(self, message: str, exc: Optional[Exception] = None):
-        """Ghi nhận lỗi chi tiết ra màn hình console và file recorder_error.log."""
+        """Ghi nhận lỗi ra console và recorder_error.log (bỏ qua mã COM busy khi gõ phím)."""
         if exc:
             err_str = str(exc).lower()
             if "rejected" in err_str or "-2147418111" in err_str:
-                return  # Trạng thái bình thường khi người dùng đang gõ phím bên trong ô
+                return  # Trạng thái bình thường khi người dùng đang nhập phím
             err_detail = f"{message}: {exc}"
         else:
             err_detail = message
@@ -176,7 +123,7 @@ class UniversalExcelRecorder:
         # Đăng ký học viên vào CSDL
         self._register_student()
 
-        # Tạo phiên ghi nhận tự động ban đầu
+        # Tạo phiên ghi nhận tự động
         self.event_logger.start_session(
             session_id=self.current_session_id,
             student_id=self.student_id,
@@ -188,18 +135,18 @@ class UniversalExcelRecorder:
         print(f"   👤 Học viên  : {self.student_name} ({self.student_id})")
         print(f"   🆔 Phiên ID  : {self.current_session_id}")
         print("   ⏸️  Trạng thái: Đang chờ người dùng mở file Excel...")
-        print("   💡 Hệ thống sẽ TỰ ĐỘNG BẬT GHI NHẬN ngay khi bạn mở file Excel!")
-        print("   📝 Tự động bắt địa chỉ ô, nội dung gõ, công thức hàm, công cụ Ribbon.")
-        print("   ⚠️  Mọi lỗi kỹ thuật sẽ được tự động xuất ra recorder_error.log")
+        print("   💡 Tự động kích hoạt ghi nhận ngay khi mở Excel.")
+        print("   🚀 Không dùng hook chuột (chuột mượt 100%, không bao giờ bị đơ).")
+        print("   📋 Toàn bộ thao tác sẽ bắn log trực tiếp tại terminal này!")
         print("=" * 80)
 
         # 1. Luồng giám sát COM & Trạng thái ô tính (Selection, Value, Formula, Format)
         self._com_thread = threading.Thread(target=self._excel_monitor_loop, daemon=True)
         self._com_thread.start()
 
-        # 2. Luồng móc nối sự kiện Ribbon / Thanh công cụ qua Windows Accessibility & Mouse Hook
-        self._hook_thread = threading.Thread(target=self._ribbon_hook_loop, daemon=True)
-        self._hook_thread.start()
+        # 2. Luồng giám sát thanh Ribbon qua UI Automation an toàn tuyệt đối (không dùng hook)
+        self._ribbon_thread = threading.Thread(target=self._ribbon_monitor_loop, daemon=True)
+        self._ribbon_thread.start()
 
     def _register_student(self):
         now_dt = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -236,7 +183,7 @@ class UniversalExcelRecorder:
                 self.log_error("Lỗi đăng ký học viên Supabase", e)
 
     def _excel_monitor_loop(self):
-        """Vòng lặp giám sát Excel độ chính xác cao: chỉ ghi nhận khi Excel mở."""
+        """Vòng lặp giám sát Excel qua COM: chỉ ghi nhận khi Excel mở."""
         pythoncom.CoInitialize()
         excel_app = None
 
@@ -257,7 +204,7 @@ class UniversalExcelRecorder:
                     except Exception as e:
                         err_str = str(e).lower()
                         if "rejected" in err_str or "-2147418111" in err_str:
-                            wb_count = 1  # Đang gõ phím bên trong ô
+                            wb_count = 1  # Đang gõ phím trong ô
                             self._is_editing = True
                         else:
                             excel_app = None
@@ -297,7 +244,7 @@ class UniversalExcelRecorder:
             active_sheet = excel_app.ActiveSheet
             sheet_name = active_sheet.Name if active_sheet else "Sheet1"
 
-            # 1. Kiểm tra mở file hoặc chuyển file
+            # 1. Mở file hoặc chuyển file
             if wb_name != self._last_wb:
                 self._last_wb = wb_name
                 try:
@@ -307,12 +254,12 @@ class UniversalExcelRecorder:
                     self.log_error("Không lấy được FullName của file Excel", e)
                 self.record_workbook_open(wb_name, wb_path)
 
-            # 2. Kiểm tra chuyển sheet
+            # 2. Chuyển Sheet
             if sheet_name != self._last_sheet:
                 self._last_sheet = sheet_name
                 self.record_sheet_activate(wb_name, sheet_name)
 
-            # 3. Lấy thông tin ô và vùng chọn hiện tại
+            # 3. Lấy thông tin ô hiện tại
             active_cell = None
             try:
                 active_cell = excel_app.ActiveCell
@@ -341,7 +288,7 @@ class UniversalExcelRecorder:
 
             sel_addr = clean_address(sel_range) or cell_addr
 
-            # 4. Kiểm tra chọn ô / chọn vùng dữ liệu (CELL_SELECTION)
+            # 4. Kiểm tra chọn ô / vùng chọn (CELL_SELECTION)
             if sel_addr and (sel_addr != self._last_sel or wb_name != self._last_wb_sel or sheet_name != self._last_sheet_sel):
                 self._last_sel = sel_addr
                 self._last_wb_sel = wb_name
@@ -351,7 +298,7 @@ class UniversalExcelRecorder:
                 self.record_selection(wb_name, sheet_name, sel_addr)
 
             # 5. KIỂM TRA NỘI DUNG Ô & CÔNG THỨC HÀM (CELL_VALUE_CHANGE / FORMULA_ENTRY)
-            # Rà soát triệt để: ô vừa gõ xong (previous cell), ô đang chỉnh sửa, và ô hiện tại
+            # Rà soát ô vừa gõ xong (previous cell), ô đang chỉnh sửa và ô hiện tại
             pending_cells: Set[str] = set()
             if self._last_cell_addr and self._last_cell_addr != cell_addr:
                 pending_cells.add(self._last_cell_addr)
@@ -360,7 +307,7 @@ class UniversalExcelRecorder:
                 self._editing_cell = None
             pending_cells.add(cell_addr)
 
-            # Nếu người dùng dán hoặc fill nhiều ô, rà soát vùng chọn (tối đa 50 ô để không lag)
+            # Nếu người dùng dán hoặc fill nhiều ô, rà soát tối đa 50 ô
             try:
                 if sel_range is not None:
                     cnt = getattr(sel_range, "Count", 1)
@@ -487,7 +434,7 @@ class UniversalExcelRecorder:
                 if "rejected" not in err_str and "-2147418111" not in err_str:
                     self.log_error(f"Lỗi kiểm tra định dạng ô [{cell_addr}]", e)
 
-            # 7. Nhận diện Ngập ngừng / Tạm dừng suy nghĩ (> 8s không thao tác tại ô)
+            # 7. Tạm dừng suy nghĩ (> 8s không thao tác tại ô)
             idle_sec = time.time() - self._last_action_time
             if idle_sec >= 8.0 and self._pause_logged_for_cell != cell_addr:
                 self._pause_logged_for_cell = cell_addr
@@ -498,125 +445,43 @@ class UniversalExcelRecorder:
             if "rejected" not in err_str and "-2147418111" not in err_str:
                 self.log_error("Lỗi trong chu kỳ quét Excel", e)
 
-    def _inspect_ribbon_element_at(self, x: int, y: int):
-        """Trích xuất tên công cụ chính xác khi người dùng nhấp chuột trên thanh Ribbon."""
+    def _ribbon_monitor_loop(self):
+        """Giám sát công cụ Ribbon qua UI Automation an toàn tuyệt đối, KHÔNG can thiệp chuột hệ thống."""
+        if not auto:
+            return
         try:
-            if not auto:
-                return
-            ctrl = auto.ControlFromPoint(x, y)
-            if ctrl and ctrl.Name:
-                tool_name = ctrl.Name.strip()
-                if tool_name and len(tool_name) < 60:
-                    ignore_names = {"ribbon", "lower ribbon", "ribbon tabs", "ribbon bar", "desktop", "excel"}
-                    if tool_name.lower() not in ignore_names:
-                        now = time.time()
-                        if tool_name != self._last_ribbon_tool or (now - self._last_ribbon_time) > 1.0:
-                            self._last_ribbon_tool = tool_name
-                            self._last_ribbon_time = now
-                            self.record_tool_used(
-                                self.current_workbook,
-                                self.current_sheet,
-                                self.current_cell,
-                                f"Chọn công cụ: {tool_name}",
-                                {"tool_name": tool_name, "source": "RibbonClick", "control_type": getattr(ctrl, "ControlTypeName", "Button")}
-                            )
-        except Exception as e:
-            self.log_error(f"Lỗi kiểm tra phần tử Ribbon tại tọa độ ({x}, {y})", e)
+            auto.InitializeUIAutomationInCurrentThread()
+        except Exception:
+            pass
 
-    def _ribbon_hook_loop(self):
-        """Lắng nghe sự kiện click trên thanh Ribbon / Menu của Excel qua Windows Accessibility & Mouse Hook."""
-        pythoncom.CoInitialize()
-
-        def win_event_callback(hWinEventHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTime):
-            if not self._excel_active:
-                return
+        while self._running:
             try:
-                cls_buff = ctypes.create_unicode_buffer(256)
-                user32.GetClassNameW(hwnd, cls_buff, 256)
-                cls_name = cls_buff.value.lower()
-
-                # Kiểm tra cửa sổ liên quan tới Ribbon Excel
-                if any(k in cls_name for k in ("netui", "mso", "ribbon", "excel")):
-                    p_acc = ctypes.c_void_p()
-                    var_child = (ctypes.c_byte * 32)()  # 32 bytes an toàn tuyệt đối cho VARIANT trên 64-bit Windows
-                    res = oleacc.AccessibleObjectFromEvent(
-                        hwnd, idObject, idChild,
-                        ctypes.byref(p_acc), ctypes.byref(var_child)
-                    )
-                    if res == 0 and p_acc.value:
-                        acc = win32com.client.Dispatch(p_acc.value)
-                        tool_name = acc.accName(idChild) if hasattr(acc, 'accName') else ""
-                        if tool_name and len(tool_name) < 60:
-                            ignore_names = {"ribbon", "lower ribbon", "ribbon tabs", "ribbon bar", "excel"}
-                            if tool_name.lower() not in ignore_names:
+                if self._excel_active:
+                    ctrl = auto.GetFocusedControl()
+                    if ctrl and ctrl.Name:
+                        name = ctrl.Name.strip()
+                        ctrl_type = getattr(ctrl, "ControlTypeName", "")
+                        # Nếu phần tử thuộc thanh công cụ / Tab / Nút Ribbon
+                        if name and len(name) < 60 and any(t in ctrl_type for t in ("Button", "Tab", "Item", "Menu")):
+                            ignore = {"ribbon", "lower ribbon", "ribbon tabs", "ribbon bar", "desktop", "excel", "sheet"}
+                            if name.lower() not in ignore:
                                 now = time.time()
-                                if tool_name != self._last_ribbon_tool or (now - self._last_ribbon_time) > 1.0:
-                                    self._last_ribbon_tool = tool_name
+                                if name != self._last_ribbon_tool or (now - self._last_ribbon_time) > 1.2:
+                                    self._last_ribbon_tool = name
                                     self._last_ribbon_time = now
                                     self.record_tool_used(
                                         self.current_workbook,
                                         self.current_sheet,
                                         self.current_cell,
-                                        f"Chọn công cụ: {tool_name}",
-                                        {"tool_name": tool_name, "source": "WinEventHook"}
+                                        f"Chọn công cụ: {name}",
+                                        {"tool_name": name, "source": "RibbonFocus", "control_type": ctrl_type}
                                     )
-            except Exception as e:
-                self.log_error("Lỗi callback WinEventHook", e)
-
-        self._win_event_proc = WinEventProcType(win_event_callback)
-        self._win_event_hook = user32.SetWinEventHook(
-            EVENT_OBJECT_FOCUS,
-            EVENT_OBJECT_INVOKED,
-            0,
-            self._win_event_proc,
-            0,
-            0,
-            WINEVENT_OUTOFCONTEXT
-        )
-
-        # Cài đặt low-level mouse hook chỉ bắt WM_LBUTTONUP trên thanh Ribbon
-        def mouse_callback(nCode, wParam, lParam):
-            if nCode >= 0 and wParam == WM_LBUTTONUP and self._excel_active:
-                try:
-                    info = ctypes.cast(lParam, ctypes.POINTER(MSLLHOOKSTRUCT)).contents
-                    hwnd = user32.WindowFromPoint(info.pt)
-                    if hwnd:
-                        cls_buff = ctypes.create_unicode_buffer(256)
-                        user32.GetClassNameW(hwnd, cls_buff, 256)
-                        cls_name = cls_buff.value.lower()
-                        if any(k in cls_name for k in ("netui", "ribbon", "mso")):
-                            threading.Thread(
-                                target=self._inspect_ribbon_element_at,
-                                args=(info.pt.x, info.pt.y),
-                                daemon=True
-                            ).start()
-                except Exception as e:
-                    self.log_error("Lỗi mouse hook", e)
-            return user32.CallNextHookEx(None, nCode, wParam, lParam)
-
-        self._mouse_proc = LowLevelMouseProc(mouse_callback)
-        self._mouse_hook = user32.SetWindowsHookExW(
-            WH_MOUSE_LL,
-            self._mouse_proc,
-            None,
-            0
-        )
-
-        msg = ctypes.wintypes.MSG()
-        while self._running:
-            if user32.PeekMessageW(ctypes.byref(msg), 0, 0, 0, 1):
-                user32.TranslateMessage(ctypes.byref(msg))
-                user32.DispatchMessageW(ctypes.byref(msg))
-            time.sleep(0.02)
-
-        if self._win_event_hook:
-            user32.UnhookWinEvent(self._win_event_hook)
-        if self._mouse_hook:
-            user32.UnhookWindowsHookEx(self._mouse_hook)
-        pythoncom.CoUninitialize()
+            except Exception:
+                pass
+            time.sleep(0.25)
 
     # =========================================================================
-    # CÁC HÀM GHI NHẬN SỰ KIỆN CHUẨN XÁC
+    # CÁC HÀM GHI NHẬN SỰ KIỆN CHUẨN XÁC & BẮN LOG RA TERMINAL
     # =========================================================================
 
     def record_workbook_open(self, wb_name: str, wb_path: str):
@@ -732,17 +597,6 @@ class UniversalExcelRecorder:
     def stop(self):
         """Dừng bộ ghi nhận an toàn."""
         self._running = False
-        if self._win_event_hook:
-            try:
-                user32.UnhookWinEvent(self._win_event_hook)
-            except Exception:
-                pass
-        if self._mouse_hook:
-            try:
-                user32.UnhookWindowsHookEx(self._mouse_hook)
-            except Exception:
-                pass
-
         print("\n🛑 Đang lưu toàn bộ sự kiện vào CSDL...")
         self.event_logger.end_session(self.current_session_id, status="COMPLETED")
         self.event_logger.close()
