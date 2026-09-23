@@ -1,6 +1,7 @@
 """
 Excel Observer Worker: Luồng xử lý bất đồng bộ (Dedicated Background QThread)
-chuyên trách giao tiếp COM và vòng lặp Tác tử, giải phóng Main GUI Thread đạt 60 FPS.
+chuyên trách giao tiếp COM và vòng lặp Tác tử, tích hợp SensorManager và EventLogger
+để thu thập dữ liệu hành vi người học thời gian thực mà không gây lag GUI.
 """
 
 import time
@@ -11,6 +12,8 @@ import pythoncom
 
 from src.excel_mcp.agent_client import AITutorMCPAgent
 from src.excel_mcp.server import excel_monitor
+from src.sensors.sensor_manager import SensorManager
+from src.data_collection.event_logger import EventLogger
 
 
 class ExcelObserverWorker(QThread):
@@ -18,8 +21,9 @@ class ExcelObserverWorker(QThread):
     Worker Thread chạy độc lập với Main GUI Thread:
     - Khởi tạo Single Threaded Apartment (STA) qua pythoncom.CoInitialize()
     - Lắng nghe COM Push Events từ Excel (< 5ms phản hồi)
-    - Xử lý các yêu cầu từ giao diện qua Thread-safe Queue
-    - Phát tín hiệu guidance_ready(dict) về Main GUI Thread để render
+    - Tích hợp SensorManager ghi nhận các sự kiện hành vi (Interaction, Mouse, Timing)
+    - Đẩy sự kiện bất đồng bộ qua EventLogger xuống CSDL SQLite (WAL mode)
+    - Phát tín hiệu guidance_ready(dict) về Main GUI Thread để render 60 FPS
     """
 
     guidance_ready = pyqtSignal(dict)
@@ -36,9 +40,21 @@ class ExcelObserverWorker(QThread):
         self.agent: Optional[AITutorMCPAgent] = None
         self._last_guidance_signature = None
 
+        # Khởi tạo các hệ thống thu thập dữ liệu hành vi
+        self.sensor_manager = SensorManager()
+        self.event_logger = EventLogger()
+        self.current_session_id = f"SES_{int(time.time())}"
+        self.student_id = "STUDENT_01"
+
     def stop(self):
-        """Dừng worker thread an toàn."""
+        """Dừng worker thread an toàn và đóng EventLogger."""
         self._running = False
+        if hasattr(self, "event_logger"):
+            try:
+                self.event_logger.end_session(self.current_session_id, status="FINISHED")
+                self.event_logger.close()
+            except Exception:
+                pass
         self.wait(2000)
 
     # =========================================================================
@@ -81,6 +97,13 @@ class ExcelObserverWorker(QThread):
             # 2. Đăng ký nhận sự kiện đẩy từ ExcelMonitor
             excel_monitor.register_event_callback(self._on_excel_com_event)
 
+            # Khởi tạo phiên học ban đầu
+            self.event_logger.start_session(
+                session_id=self.current_session_id,
+                student_id=self.student_id,
+                lesson_id=self.agent.current_exercise or "BAI_07",
+            )
+
             last_step_time = time.perf_counter()
 
             # Phát thông tin khởi đầu
@@ -116,6 +139,22 @@ class ExcelObserverWorker(QThread):
                     try:
                         guidance = self.agent.step()
                         if guidance:
+                            # 1. Thu thập sự kiện tương tác qua SensorManager
+                            context = {
+                                "session_id": self.current_session_id,
+                                "lesson_id": self.agent.current_exercise,
+                                "step_index": self.agent.runtime.session.current_step_index,
+                                "step_title": guidance.get("step_title", ""),
+                            }
+                            events = self.sensor_manager.process_tick(
+                                excel_state=self.agent.runtime.last_excel_state,
+                                mouse_state=self.agent.runtime.last_mouse_state,
+                                context=context,
+                            )
+                            if events:
+                                self.event_logger.log_events(events)
+
+                            # 2. Phát tín hiệu cập nhật GUI
                             sig = (
                                 guidance.get("agent_status", ""),
                                 guidance.get("step_title", ""),
@@ -143,6 +182,15 @@ class ExcelObserverWorker(QThread):
             return
 
         if action == "OPEN_EXERCISE":
+            self.event_logger.end_session(self.current_session_id, status="SWITCH_LESSON")
+            self.current_session_id = f"SES_{payload}_{int(time.time())}"
+            self.event_logger.start_session(
+                session_id=self.current_session_id,
+                student_id=self.student_id,
+                lesson_id=f"BAI_{payload}",
+            )
+            self.sensor_manager.reset_all()
+
             res = self.agent.set_exercise(payload)
             self.exercise_launched.emit(res)
             guidance = res.get("guidance")
