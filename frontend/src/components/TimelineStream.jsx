@@ -157,16 +157,24 @@ export default function TimelineStream({ events, activeFilter, onFilterChange, l
             metaData = metaData || {};
 
             let previewText = '';
-            if (metaData.tool_name || metaData.tool) {
+            if (evt.event_type === 'CELL_VALUE_CHANGE') {
+              previewText = metaData.value !== undefined && metaData.value !== ''
+                ? `Nhập nội dung: "${metaData.value}"`
+                : 'Xóa nội dung ô';
+            } else if (evt.event_type === 'FORMULA_ENTRY') {
+              previewText = `Công thức: ${metaData.formula || metaData.raw || ''}`;
+            } else if (evt.event_type === 'EXCEL_TOOL_USED') {
+              previewText = `Công cụ: ${metaData.tool_name || metaData.tool || 'Định dạng'}`;
+            } else if (evt.event_type === 'CELL_SELECTION' || evt.event_type === 'RANGE_SELECTION') {
+              previewText = `Vị trí ô: [${evt.cell || metaData.cell || ''}]`;
+            } else if (evt.event_type === 'STUDENT_PAUSE') {
+              previewText = `Dừng suy nghĩ: ${Number(metaData.pause_duration_sec || 0).toFixed(1)}s`;
+            } else if (evt.event_type === 'WORKBOOK_OPEN') {
+              previewText = `Mở bảng tính: ${metaData.workbook_name || metaData.workbook || ''}`;
+            } else if (evt.event_type === 'SHEET_ACTIVATE') {
+              previewText = `Sheet: ${metaData.sheet || ''}`;
+            } else if (metaData.tool_name || metaData.tool) {
               previewText = `Công cụ: ${metaData.tool_name || metaData.tool}`;
-            } else if (metaData.formula) {
-              previewText = `Công thức: ${metaData.formula}`;
-            } else if (metaData.value !== undefined) {
-              previewText = `Giá trị: "${metaData.value}"`;
-            } else if (metaData.workbook_name || metaData.workbook) {
-              previewText = `Bảng tính: ${metaData.workbook_name || metaData.workbook}`;
-            } else if (metaData.pause_duration_sec) {
-              previewText = `Dừng suy nghĩ: ${Number(metaData.pause_duration_sec).toFixed(1)}s`;
             }
 
             return (

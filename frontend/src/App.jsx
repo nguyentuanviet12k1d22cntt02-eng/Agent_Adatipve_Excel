@@ -170,13 +170,13 @@ export default function App() {
           if (meta.sheet) setActiveSheet(meta.sheet);
           if (meta.student_name) setActiveStudent(meta.student_name);
 
-          // Cập nhật công cụ đã dùng
+          // Cập nhật công cụ hoặc nội dung đã dùng
           if (newEvt.event_type === 'EXCEL_TOOL_USED') {
             setActiveTool(meta.tool_name || meta.tool || 'Định dạng');
           } else if (newEvt.event_type === 'FORMULA_ENTRY') {
-            setActiveTool('Gõ công thức hàm');
+            setActiveTool(meta.formula ? `Hàm: ${meta.formula}` : 'Gõ công thức hàm');
           } else if (newEvt.event_type === 'CELL_VALUE_CHANGE') {
-            setActiveTool('Nhập dữ liệu');
+            setActiveTool(meta.value !== undefined && meta.value !== '' ? `Nhập: "${meta.value}"` : 'Nhập dữ liệu');
           } else if (newEvt.event_type === 'CELL_SELECTION') {
             setActiveTool('Chọn địa chỉ ô');
           } else if (newEvt.event_type === 'STUDENT_PAUSE') {
