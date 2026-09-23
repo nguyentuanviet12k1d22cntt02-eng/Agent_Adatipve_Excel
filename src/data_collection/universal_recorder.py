@@ -5,7 +5,7 @@ Dành cho phòng máy học tập & Nghiên cứu hành vi:
 - KHÔNG bắt tín hiệu chuột liên tiếp hay làm rác luồng sự kiện.
 - Ghi nhận chính xác LỊCH SỬ THAO TÁC:
   + Địa chỉ ô được chọn (CELL_SELECTION: ví dụ C8, J10, A1:B10)
-  + Nhập liệu giá trị (CELL_VALUE_CHANGE: "Hello", số liệu...)
+  + Nhập liệu giá trị (CELL_VALUE_CHANGE: "Hello", "xin chào", số liệu...)
   + Gõ công thức hàm (FORMULA_ENTRY: =IF(...), =VLOOKUP(...), =SUM(...))
   + Tên công cụ / Ribbon / Định dạng (EXCEL_TOOL_USED: Tab Home, Tab Insert, Bold, Tô màu, Đổi Font...)
   + Mở bảng tính / Đổi Sheet (WORKBOOK_OPEN, SHEET_ACTIVATE)
@@ -58,6 +58,22 @@ WinEventProcType = ctypes.WINFUNCTYPE(
 )
 
 
+def clean_address(raw_obj) -> str:
+    """Trích xuất địa chỉ ô an toàn tuyệt đối từ COM Range / ActiveCell."""
+    if raw_obj is None:
+        return ""
+    try:
+        addr = getattr(raw_obj, "Address", raw_obj)
+        if callable(addr):
+            addr = addr()
+        return str(addr).replace("$", "").strip()
+    except Exception:
+        try:
+            return str(raw_obj).replace("$", "").strip()
+        except Exception:
+            return ""
+
+
 class UniversalExcelRecorder:
     def __init__(self, student_id: Optional[str] = None, student_name: Optional[str] = None):
         self.station_name = os.environ.get("COMPUTERNAME", socket.gethostname())
@@ -81,10 +97,12 @@ class UniversalExcelRecorder:
 
         # Bộ nhớ đệm lưu trạng thái để so khớp thay đổi
         self._last_sel = None
+        self._last_wb_sel = None
+        self._last_sheet_sel = None
         self._last_wb = None
         self._last_sheet = None
         self._cell_values = {}      # key: (wb, sheet, cell) -> (val_str, formula_str)
-        self._cell_formats = {}     # key: (wb, sheet, cell) -> (font_name, size, bold, italic, fcolor, icolor, numfmt, align)
+        self._cell_formats = {}     # key: (wb, sheet, cell) -> (font_name, size, bold, italic, icolor, numfmt)
         self._last_action_time = time.time()
         self._pause_logged_for_cell = None
 
@@ -234,36 +252,48 @@ class UniversalExcelRecorder:
                 self._last_sheet = sheet_name
                 self.record_sheet_activate(wb_name, sheet_name)
 
-            # 3. Lấy thông tin ô và vùng chọn hiện tại
-            active_cell = excel_app.ActiveCell
-            sel_range = excel_app.Selection
+            # 3. Lấy thông tin ô và vùng chọn hiện tại (Dùng clean_address an toàn tuyệt đối)
+            active_cell = None
+            try:
+                active_cell = excel_app.ActiveCell
+            except Exception:
+                return
 
             if not active_cell:
                 return
 
-            try:
-                cell_addr = active_cell.Address(False, False)
-                sel_addr = sel_range.Address(False, False) if sel_range else cell_addr
-            except Exception:
+            cell_addr = clean_address(active_cell)
+            if not cell_addr:
                 return
 
+            sel_range = None
+            try:
+                sel_range = excel_app.Selection
+            except Exception:
+                pass
+
+            sel_addr = clean_address(sel_range) or cell_addr
+
             # 4. Kiểm tra chọn ô / chọn vùng dữ liệu (CELL_SELECTION)
-            if sel_addr != self._last_sel:
+            if sel_addr and (sel_addr != self._last_sel or wb_name != self._last_wb_sel or sheet_name != self._last_sheet_sel):
                 self._last_sel = sel_addr
+                self._last_wb_sel = wb_name
+                self._last_sheet_sel = sheet_name
                 self._last_action_time = time.time()
                 self._pause_logged_for_cell = None
                 self.record_selection(wb_name, sheet_name, sel_addr)
 
             # 5. Kiểm tra Giá trị & Công thức hàm (CELL_VALUE_CHANGE / FORMULA_ENTRY)
+            cur_val = None
+            cur_formula = None
             try:
                 cur_val = active_cell.Value
                 cur_formula = active_cell.Formula
             except Exception:
-                cur_val = None
-                cur_formula = None
+                pass
 
-            val_str = str(cur_val) if cur_val is not None else ""
-            formula_str = str(cur_formula) if cur_formula is not None else ""
+            val_str = str(cur_val).strip() if cur_val is not None else ""
+            formula_str = str(cur_formula).strip() if cur_formula is not None else ""
 
             cell_key = (wb_name, sheet_name, cell_addr)
             old_data = self._cell_values.get(cell_key)
@@ -280,20 +310,21 @@ class UniversalExcelRecorder:
 
             # 6. Kiểm tra Công cụ & Định dạng đã chọn (EXCEL_TOOL_USED)
             try:
-                font_name = active_cell.Font.Name
-                font_size = active_cell.Font.Size
-                font_bold = active_cell.Font.Bold
-                font_italic = active_cell.Font.Italic
-                font_color = active_cell.Font.Color
-                interior_color = active_cell.Interior.Color
+                f = active_cell.Font
+                font_name = str(f.Name) if hasattr(f, 'Name') else ""
+                font_size = float(f.Size) if hasattr(f, 'Size') else 0.0
+                font_bold = bool(f.Bold) if hasattr(f, 'Bold') else False
+                font_italic = bool(f.Italic) if hasattr(f, 'Italic') else False
+                
+                interior = active_cell.Interior
+                interior_color = int(interior.Color) if hasattr(interior, 'Color') else 0
                 num_format = str(active_cell.NumberFormat)
-                align = active_cell.HorizontalAlignment
 
-                cur_fmt = (font_name, font_size, font_bold, font_italic, font_color, interior_color, num_format, align)
+                cur_fmt = (font_name, font_size, font_bold, font_italic, interior_color, num_format)
                 old_fmt = self._cell_formats.get(cell_key)
 
                 if old_fmt is not None and old_fmt != cur_fmt:
-                    old_fn, old_fs, old_b, old_it, old_fc, old_ic, old_nf, old_al = old_fmt
+                    old_fn, old_fs, old_b, old_it, old_ic, old_nf = old_fmt
                     self._last_action_time = time.time()
 
                     # Phân tích công cụ cụ thể người dùng vừa bấm
@@ -301,18 +332,14 @@ class UniversalExcelRecorder:
                         self.record_tool_used(wb_name, sheet_name, cell_addr, "In đậm chữ (Bold)", {"tool": "Bold", "value": True})
                     if font_italic != old_it and font_italic:
                         self.record_tool_used(wb_name, sheet_name, cell_addr, "In nghiêng (Italic)", {"tool": "Italic", "value": True})
-                    if font_name != old_fn:
+                    if font_name != old_fn and font_name:
                         self.record_tool_used(wb_name, sheet_name, cell_addr, f"Đổi Phông chữ: {font_name}", {"tool": "FontName", "value": font_name})
-                    if font_size != old_fs:
+                    if font_size != old_fs and font_size > 0:
                         self.record_tool_used(wb_name, sheet_name, cell_addr, f"Đổi Cỡ chữ: {font_size}pt", {"tool": "FontSize", "value": font_size})
                     if interior_color != old_ic and interior_color not in (16777215, -4142):
                         self.record_tool_used(wb_name, sheet_name, cell_addr, "Tô màu nền ô (Fill Color)", {"tool": "FillColor", "color_code": interior_color})
-                    if font_color != old_fc and font_color != 0:
-                        self.record_tool_used(wb_name, sheet_name, cell_addr, "Đổi màu chữ (Font Color)", {"tool": "FontColor", "color_code": font_color})
                     if num_format != old_nf and num_format not in ("General", "@", ""):
                         self.record_tool_used(wb_name, sheet_name, cell_addr, f"Định dạng số: {num_format}", {"tool": "NumberFormat", "format": num_format})
-                    if align != old_al and align != 1:
-                        self.record_tool_used(wb_name, sheet_name, cell_addr, "Căn lề ô (Alignment)", {"tool": "Alignment", "align_code": align})
 
                 self._cell_formats[cell_key] = cur_fmt
             except Exception:
@@ -325,8 +352,9 @@ class UniversalExcelRecorder:
                 self.record_pause(wb_name, sheet_name, cell_addr, idle_sec)
 
         except Exception as e:
-            # Bỏ qua lỗi RPC khi người dùng đang gõ
-            pass
+            err_str = str(e).lower()
+            if "rejected" not in err_str and "-2147418111" not in err_str:
+                pass
 
     def _ribbon_hook_loop(self):
         """Lắng nghe sự kiện click trên thanh Ribbon / Menu của Excel qua Windows Accessibility."""
