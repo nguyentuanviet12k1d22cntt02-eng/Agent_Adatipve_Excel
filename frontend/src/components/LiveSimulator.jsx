@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Play, Sparkles, Clock, AlertCircle, Edit3, MousePointer, CheckCircle } from 'lucide-react';
+import { Play, Sparkles, Clock, AlertCircle, Edit3, MousePointer, CheckCircle, Radio } from 'lucide-react';
 import { simulateEvent } from '../api';
+import { insertEventToSupabase } from '../supabase';
 
 export default function LiveSimulator({ sessionId, onEventSimulated }) {
   const [loading, setLoading] = useState(false);
@@ -10,12 +11,27 @@ export default function LiveSimulator({ sessionId, onEventSimulated }) {
     if (!sessionId) return;
     setLoading(true);
     try {
-      const res = await simulateEvent(sessionId, type, cell, step, metadata);
+      // 1. Ghi trực tiếp vào Supabase Cloud để kích hoạt WebSocket Realtime
+      await insertEventToSupabase({
+        session_id: sessionId,
+        event_type: type,
+        cell: cell,
+        step_index: step,
+        metadata: metadata,
+      });
+
+      // 2. Đồng thời ghi vào MySQL (nếu API local đang chạy)
+      try {
+        await simulateEvent(sessionId, type, cell, step, metadata);
+      } catch (e) {
+        console.warn('MySQL Local sync skipped:', e.message);
+      }
+
       setToast({
         type: 'success',
-        msg: `Đã ghi nhận sự kiện ${type} vào MySQL thành công!`,
+        msg: `⚡ Đã phát sự kiện [${type}] vào Supabase Realtime!`,
       });
-      setTimeout(() => setToast(null), 3500);
+      setTimeout(() => setToast(null), 3000);
       if (onEventSimulated) {
         onEventSimulated();
       }
@@ -31,16 +47,16 @@ export default function LiveSimulator({ sessionId, onEventSimulated }) {
   };
 
   return (
-    <div style={{ marginBottom: '16px' }}>
+    <div style={{ marginBottom: '20px' }}>
       <div className="sim-toolbar">
         <div className="sim-toolbar-title">
-          <Sparkles size={16} />
-          <span>Mô phỏng phát sự kiện Telemetry trực tiếp vào MySQL:</span>
+          <Radio size={16} className="text-emerald-600 animate-pulse" />
+          <span>Mô phỏng phát sự kiện Telemetry (Supabase Realtime):</span>
         </div>
 
         <button
           className="btn-action btn-amber"
-          style={{ padding: '6px 12px', fontSize: '0.78rem' }}
+          style={{ padding: '6px 14px', fontSize: '0.8rem' }}
           disabled={loading || !sessionId}
           onClick={() =>
             handleSimulate('MOUSE_HESITATION_START', 'D5', 2, {
@@ -49,14 +65,14 @@ export default function LiveSimulator({ sessionId, onEventSimulated }) {
               mouse_coords: [540, 380],
             })
           }
-          title="Ghi nhận sự kiện học viên dừng chuột 4.8s suy nghĩ vào MySQL"
+          title="Ghi nhận sự kiện học viên dừng chuột 4.8s suy nghĩ vào Supabase"
         >
-          <Clock size={14} /> Ngập ngừng 4.8s
+          <Clock size={14} /> Ngập ngừng 4.8s (D5)
         </button>
 
         <button
           className="btn-action btn-secondary"
-          style={{ padding: '6px 12px', fontSize: '0.78rem', color: 'var(--accent-rose)' }}
+          style={{ padding: '6px 14px', fontSize: '0.8rem', color: 'var(--accent-rose)' }}
           disabled={loading || !sessionId}
           onClick={() =>
             handleSimulate('FORMULA_ENTRY', 'E5', 2, {
@@ -65,14 +81,14 @@ export default function LiveSimulator({ sessionId, onEventSimulated }) {
               is_valid: false,
             })
           }
-          title="Ghi nhận lỗi gõ sai chỉ số cột VLOOKUP vào MySQL"
+          title="Ghi nhận lỗi gõ sai chỉ số cột VLOOKUP vào Supabase"
         >
           <AlertCircle size={14} /> Lỗi công thức (#REF!)
         </button>
 
         <button
           className="btn-action btn-secondary"
-          style={{ padding: '6px 12px', fontSize: '0.78rem', color: 'var(--accent-cyan)' }}
+          style={{ padding: '6px 14px', fontSize: '0.8rem', color: 'var(--accent-sky)' }}
           disabled={loading || !sessionId}
           onClick={() =>
             handleSimulate('CELL_SELECTION', 'C5', 2, {
@@ -87,7 +103,7 @@ export default function LiveSimulator({ sessionId, onEventSimulated }) {
 
         <button
           className="btn-action btn-secondary"
-          style={{ padding: '6px 12px', fontSize: '0.78rem', color: 'var(--primary)' }}
+          style={{ padding: '6px 14px', fontSize: '0.8rem', color: 'var(--primary)' }}
           disabled={loading || !sessionId}
           onClick={() =>
             handleSimulate('CELL_VALUE_CHANGE', 'C5', 2, {
@@ -105,18 +121,19 @@ export default function LiveSimulator({ sessionId, onEventSimulated }) {
       {toast && (
         <div
           style={{
-            padding: '8px 16px',
-            borderRadius: '6px',
-            fontSize: '0.8rem',
-            background: toast.type === 'success' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(244, 63, 94, 0.2)',
-            color: toast.type === 'success' ? 'var(--primary)' : 'var(--accent-rose)',
-            border: `1px solid ${toast.type === 'success' ? 'var(--border-highlight)' : 'var(--border-rose)'}`,
+            padding: '10px 16px',
+            borderRadius: '8px',
+            fontSize: '0.82rem',
+            background: toast.type === 'success' ? '#ecfdf5' : '#fff1f2',
+            color: toast.type === 'success' ? '#065f46' : '#9f1239',
+            border: `1px solid ${toast.type === 'success' ? '#a7f3d0' : '#fecdd3'}`,
             display: 'flex',
             alignItems: 'center',
             gap: '8px',
+            fontWeight: 500,
           }}
         >
-          <CheckCircle size={15} />
+          <CheckCircle size={16} />
           <span>{toast.msg}</span>
         </div>
       )}

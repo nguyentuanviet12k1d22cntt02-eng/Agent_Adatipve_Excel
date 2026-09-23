@@ -20,7 +20,7 @@ export default function CognitiveAiTab({ predictions, feedback }) {
                 width: '48px',
                 height: '48px',
                 borderRadius: '12px',
-                background: isStuck ? 'rgba(244, 63, 94, 0.2)' : 'rgba(16, 185, 129, 0.2)',
+                background: isStuck ? '#ffe4e6' : '#dcfce7',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -30,25 +30,26 @@ export default function CognitiveAiTab({ predictions, feedback }) {
               <BrainCircuit size={26} />
             </div>
             <div>
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>
                 Trạng thái nhận thức người học (ML Prediction)
               </div>
-              <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span>{latestPrediction.state}</span>
                 <span
                   style={{
                     fontSize: '0.75rem',
                     padding: '2px 8px',
                     borderRadius: '999px',
-                    background: 'rgba(255, 255, 255, 0.1)',
-                    color: '#e2e8f0',
+                    background: '#e2e8f0',
+                    color: 'var(--text-muted)',
+                    fontWeight: 600,
                   }}
                 >
                   Độ tin cậy: {Math.round(latestPrediction.confidence * 100)}%
                 </span>
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-subtle)', marginTop: '2px' }}>
-                Mô hình: {latestPrediction.model_version} • Cập nhật lúc {new Date(latestPrediction.timestamp * 1000).toLocaleTimeString()}
+                Mô hình: {latestPrediction.model_version || 'Cognitive-RF-v1'} • Cập nhật lúc {latestPrediction.timestamp ? new Date(latestPrediction.timestamp * 1000).toLocaleTimeString() : 'Vừa xong'}
               </div>
             </div>
           </div>
@@ -90,8 +91,8 @@ export default function CognitiveAiTab({ predictions, feedback }) {
               <div
                 key={item.feedback_id}
                 style={{
-                  background: 'rgba(30, 41, 59, 0.5)',
-                  border: '1px solid rgba(99, 102, 241, 0.25)',
+                  background: '#f8fafc',
+                  border: '1px solid var(--border-light)',
                   borderRadius: '10px',
                   padding: '16px',
                   display: 'flex',
@@ -103,7 +104,7 @@ export default function CognitiveAiTab({ predictions, feedback }) {
                     width: '36px',
                     height: '36px',
                     borderRadius: '8px',
-                    background: 'rgba(99, 102, 241, 0.15)',
+                    background: '#eef2ff',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -115,14 +116,14 @@ export default function CognitiveAiTab({ predictions, feedback }) {
                 </div>
                 <div style={{ flex: 1 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                    <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#e2e8f0' }}>
-                      Hình thức can thiệp: <span style={{ color: 'var(--accent-cyan)' }}>{item.intervention_type}</span>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)' }}>
+                      Hình thức can thiệp: <span style={{ color: 'var(--accent-sky)' }}>{item.intervention_type}</span>
                     </div>
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-subtle)', fontFamily: 'var(--font-mono)' }}>
-                      {new Date(item.timestamp * 1000).toLocaleTimeString()}
+                      {item.timestamp ? new Date(item.timestamp * 1000).toLocaleTimeString() : 'N/A'}
                     </span>
                   </div>
-                  <div style={{ fontSize: '0.85rem', color: '#cbd5e1', lineHeight: '1.5' }}>
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: '1.5' }}>
                     "{item.message}"
                   </div>
                   <div style={{ marginTop: '8px', fontSize: '0.72rem', color: 'var(--text-subtle)' }}>

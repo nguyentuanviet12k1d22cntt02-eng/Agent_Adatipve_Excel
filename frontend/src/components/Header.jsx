@@ -1,60 +1,48 @@
 import React from 'react';
-import { Database, Activity, RefreshCw, Layers, ShieldCheck } from 'lucide-react';
+import { Cloud, Database, RefreshCw, FileSpreadsheet } from 'lucide-react';
 
-export default function Header({ health, isRefreshing, onRefresh, autoRefresh, setAutoRefresh }) {
-  const isOnline = health?.status === 'online';
-
+export default function Header({ isRealtimeConnected, isRefreshing, onRefresh }) {
   return (
     <header className="top-header">
       <div className="brand-section">
         <div className="brand-icon-wrapper">
-          <Layers size={24} />
+          <FileSpreadsheet size={24} />
         </div>
         <div>
           <div className="brand-title">
-            Adaptive AI Excel Tutor
-            <span className="brand-badge">Phase 1: Telemetry & Sensing</span>
+            Excel Adaptive AI Tutor
+            <span className="brand-badge">Realtime Telemetry Dashboard</span>
           </div>
           <div className="brand-subtitle">
-            Hệ thống thu thập dữ liệu hành vi người học & Phân tích nhận thức thời gian thực
+            Hệ thống giám sát thao tác Excel trực tiếp qua Supabase Cloud & Machine Learning
           </div>
         </div>
       </div>
 
       <div className="header-actions">
-        {/* MySQL Health Indicator */}
-        <div className="db-status-chip">
-          <span className={`status-dot ${isOnline ? 'online' : 'offline'}`} />
-          <Database size={15} style={{ color: isOnline ? 'var(--primary)' : 'var(--accent-rose)' }} />
+        {/* Supabase Status Chip */}
+        <div className="db-status-chip supabase">
+          <span className={`status-dot ${isRealtimeConnected ? 'online' : 'offline'}`} />
+          <Cloud size={16} />
           <span>
-            {isOnline ? (
-              <>
-                <strong>MySQL 9.4</strong> Connected ({health.database_name})
-              </>
-            ) : (
-              <>Đang kết nối lại MySQL...</>
-            )}
+            <strong>Supabase Cloud</strong> Realtime Active
           </span>
         </div>
 
-        {/* Auto Refresh Toggle */}
-        <button
-          className={`btn-action ${autoRefresh ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setAutoRefresh(!autoRefresh)}
-          title="Tự động cập nhật mỗi 3 giây"
-        >
-          <Activity size={16} />
-          <span>{autoRefresh ? 'Live Polling: BẬT' : 'Live Polling: TẮT'}</span>
-        </button>
+        {/* MySQL Status Chip */}
+        <div className="db-status-chip">
+          <Database size={15} style={{ color: 'var(--primary)' }} />
+          <span>MySQL Local Synced</span>
+        </div>
 
         {/* Manual Refresh */}
         <button
           className="btn-action btn-secondary"
           onClick={onRefresh}
           disabled={isRefreshing}
-          title="Làm mới dữ liệu từ MySQL"
+          title="Tải lại dữ liệu mới nhất"
         >
-          <RefreshCw size={16} className={isRefreshing ? 'animate-spin' : ''} />
+          <RefreshCw size={15} className={isRefreshing ? 'animate-spin' : ''} />
           <span>Làm mới</span>
         </button>
       </div>

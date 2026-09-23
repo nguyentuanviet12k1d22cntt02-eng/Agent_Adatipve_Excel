@@ -43,7 +43,7 @@ export default function FeatureViewer({ features }) {
           </div>
           <div className="feature-row">
             <span className="f-name">Khoảng ngập ngừng lớn nhất (mouse_idle_max):</span>
-            <span className="f-val" style={{ color: latest.mouse_idle_max > 4 ? 'var(--accent-amber)' : '#fff' }}>
+            <span className="f-val" style={{ color: latest.mouse_idle_max > 4 ? 'var(--accent-amber)' : 'var(--text-main)' }}>
               {Number(latest.mouse_idle_max).toFixed(2)}s
             </span>
           </div>
@@ -83,13 +83,13 @@ export default function FeatureViewer({ features }) {
           </div>
           <div className="feature-row">
             <span className="f-name">Lỗi công thức (formula_errors):</span>
-            <span className="f-val" style={{ color: latest.formula_errors > 0 ? 'var(--accent-rose)' : '#fff' }}>
+            <span className="f-val" style={{ color: latest.formula_errors > 0 ? 'var(--accent-rose)' : 'var(--text-main)' }}>
               {latest.formula_errors}
             </span>
           </div>
           <div className="feature-row">
             <span className="f-name">Số lần thử sai (wrong_attempts):</span>
-            <span className="f-val" style={{ color: latest.wrong_attempts > 0 ? 'var(--accent-rose)' : '#fff' }}>
+            <span className="f-val" style={{ color: latest.wrong_attempts > 0 ? 'var(--accent-rose)' : 'var(--text-main)' }}>
               {latest.wrong_attempts}
             </span>
           </div>
