@@ -4,12 +4,12 @@ Dành cho phòng máy học tập & Nghiên cứu hành vi:
 - Chỉ bắt đầu ghi nhận KHI VÀ CHỈ KHI người học MỞ FILE EXCEL.
 - KHÔNG bắt tín hiệu chuột liên tiếp hay làm rác luồng sự kiện.
 - Ghi nhận chính xác LỊCH SỬ THAO TÁC:
-  + Địa chỉ ô được chọn (CELL_SELECTION: ví dụ J10, C9, A1:B10)
-  + Nhập liệu giá trị (CELL_VALUE_CHANGE: chuỗi văn bản, số liệu)
+  + Địa chỉ ô được chọn (CELL_SELECTION: ví dụ C8, J10, A1:B10)
+  + Nhập liệu giá trị (CELL_VALUE_CHANGE: "Hello", số liệu...)
   + Gõ công thức hàm (FORMULA_ENTRY: =IF(...), =VLOOKUP(...), =SUM(...))
-  + Tên công cụ / Định dạng đã sử dụng (EXCEL_TOOL_USED: Đổi Font, Cỡ chữ, Tô màu nền, In đậm, Căn lề, Định dạng số...)
+  + Tên công cụ / Ribbon / Định dạng (EXCEL_TOOL_USED: Tab Home, Tab Insert, Bold, Tô màu, Đổi Font...)
   + Mở bảng tính / Đổi Sheet (WORKBOOK_OPEN, SHEET_ACTIVATE)
-  + Tạm dừng suy nghĩ kéo dài tại ô (STUDENT_PAUSE: khi dừng > 10s tại một ô)
+  + Tạm dừng suy nghĩ kéo dài tại ô (STUDENT_PAUSE: khi dừng > 8s tại một ô)
 - Đồng bộ tức thì trực tiếp vào Supabase Cloud (WebSockets Realtime) & MySQL.
 """
 
@@ -24,6 +24,8 @@ if sys.platform == "win32":
 import time
 import socket
 import threading
+import ctypes
+import ctypes.wintypes
 from typing import Any, Dict, Optional
 
 # Thiết lập đường dẫn thư mục gốc
@@ -35,6 +37,25 @@ import win32com.client
 from src.data_collection.db_manager import DatabaseManager
 from src.data_collection.event_logger import EventLogger
 from src.sensors.base_sensor import RawEvent
+
+# Ctypes Windows Accessibility Constants
+user32 = ctypes.windll.user32
+oleacc = ctypes.windll.oleacc
+
+EVENT_OBJECT_INVOKED = 0x8013
+EVENT_OBJECT_SELECTION = 0x8006
+WINEVENT_OUTOFCONTEXT = 0
+
+WinEventProcType = ctypes.WINFUNCTYPE(
+    None,
+    ctypes.wintypes.HANDLE,
+    ctypes.wintypes.DWORD,
+    ctypes.wintypes.HWND,
+    ctypes.wintypes.LONG,
+    ctypes.wintypes.LONG,
+    ctypes.wintypes.DWORD,
+    ctypes.wintypes.DWORD
+)
 
 
 class UniversalExcelRecorder:
@@ -56,8 +77,9 @@ class UniversalExcelRecorder:
         self._running = False
         self._excel_active = False
         self._com_thread = None
+        self._hook_thread = None
 
-        # Bộ nhớ đệm lưu trạng thái ô để phát hiện thay đổi
+        # Bộ nhớ đệm lưu trạng thái để so khớp thay đổi
         self._last_sel = None
         self._last_wb = None
         self._last_sheet = None
@@ -65,6 +87,10 @@ class UniversalExcelRecorder:
         self._cell_formats = {}     # key: (wb, sheet, cell) -> (font_name, size, bold, italic, fcolor, icolor, numfmt, align)
         self._last_action_time = time.time()
         self._pause_logged_for_cell = None
+
+        # Bộ lọc chống trùng sự kiện Ribbon trong thời gian ngắn
+        self._last_ribbon_tool = ""
+        self._last_ribbon_time = 0
 
     def start(self):
         """Bắt đầu tiến trình ghi nhận thao tác ngầm."""
@@ -85,13 +111,17 @@ class UniversalExcelRecorder:
         print(f"   👤 Học viên : {self.student_name} ({self.student_id})")
         print(f"   🆔 Phiên ID : {self.current_session_id}")
         print("   ⏸️  Trạng thái: Đang chờ người dùng mở file Excel...")
-        print("   💡 Hệ thống sẽ TỰ ĐỘNG GHI NHẬN khi bạn mở file Excel!")
-        print("   ❌ ĐÃ TẮT tín hiệu chuột liên tiếp. Chỉ ghi nhận địa chỉ ô & công cụ thực tế.")
+        print("   💡 Hệ thống sẽ TỰ ĐỘNG BẬT GHI NHẬN ngay khi bạn mở file Excel!")
+        print("   ❌ ĐÃ TẮT triệt để tín hiệu chuột liên tiếp. Chỉ lưu địa chỉ ô & công cụ.")
         print("=" * 80)
 
-        # Khởi động luồng giám sát Excel
+        # 1. Luồng giám sát COM & Trạng thái ô tính (Selection, Value, Formula, Format)
         self._com_thread = threading.Thread(target=self._excel_monitor_loop, daemon=True)
         self._com_thread.start()
+
+        # 2. Luồng móc nối sự kiện Ribbon / Thanh công cụ qua Windows Accessibility
+        self._hook_thread = threading.Thread(target=self._ribbon_hook_loop, daemon=True)
+        self._hook_thread.start()
 
     def _register_student(self):
         now_dt = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -108,7 +138,7 @@ class UniversalExcelRecorder:
                         (self.student_id, self.student_name, now_dt),
                     )
                 conn.close()
-            except Exception as e:
+            except Exception:
                 pass
 
         if self.db_manager.supabase_available:
@@ -124,7 +154,7 @@ class UniversalExcelRecorder:
                         (self.student_id, self.student_name, now_dt),
                     )
                 conn.close()
-            except Exception as e:
+            except Exception:
                 pass
 
     def _excel_monitor_loop(self):
@@ -134,7 +164,7 @@ class UniversalExcelRecorder:
 
         while self._running:
             try:
-                # 1. Kết nối hoặc kiểm tra kết nối với Excel
+                # 1. Tìm hoặc kiểm tra kết nối với Excel
                 if excel_app is None:
                     try:
                         excel_app = win32com.client.GetActiveObject("Excel.Application")
@@ -143,18 +173,25 @@ class UniversalExcelRecorder:
 
                 # 2. Nếu Excel đang mở
                 if excel_app is not None:
+                    wb_count = 0
                     try:
                         wb_count = excel_app.Workbooks.Count
-                    except Exception:
-                        wb_count = 0
-                        excel_app = None
+                    except Exception as e:
+                        # Nếu người dùng đang gõ phím bên trong ô (cell edit mode) -> Excel tạm khóa COM
+                        # KHÔNG hủy excel_app, chỉ bỏ qua và quét tiếp vòng sau!
+                        err_str = str(e).lower()
+                        if "rejected" in err_str or "-2147418111" in err_str:
+                            wb_count = 1  # Vẫn đang mở và đang làm bài
+                        else:
+                            excel_app = None
+                            wb_count = 0
 
                     if wb_count > 0:
                         if not self._excel_active:
                             self._excel_active = True
                             print("\n🟢 [EXCEL ĐÃ MỞ]: Bắt đầu ghi nhận thao tác người học!")
 
-                        # Đọc trạng thái Excel hiện tại
+                        # Quét trạng thái chi tiết của Workbook, Sheet, Ô hiện tại
                         self._poll_excel_state(excel_app)
                     else:
                         if self._excel_active:
@@ -165,11 +202,10 @@ class UniversalExcelRecorder:
                         self._excel_active = False
                         print("\n💤 [EXCEL CHƯA MỞ HOẶC ĐÃ ĐÓNG]: Đang chờ mở file...")
 
-            except Exception as e:
-                excel_app = None
-                self._excel_active = False
+            except Exception:
+                pass
 
-            time.sleep(0.15)  # Chu kỳ quét 150ms cực nhạy và không tốn CPU
+            time.sleep(0.12)  # Quét cực nhạy 120ms
 
         pythoncom.CoUninitialize()
 
@@ -289,7 +325,69 @@ class UniversalExcelRecorder:
                 self.record_pause(wb_name, sheet_name, cell_addr, idle_sec)
 
         except Exception as e:
+            # Bỏ qua lỗi RPC khi người dùng đang gõ
             pass
+
+    def _ribbon_hook_loop(self):
+        """Lắng nghe sự kiện click trên thanh Ribbon / Menu của Excel qua Windows Accessibility."""
+        pythoncom.CoInitialize()
+
+        def win_event_callback(hWinEventHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTime):
+            if not self._excel_active:
+                return
+            try:
+                cls_buff = ctypes.create_unicode_buffer(256)
+                user32.GetClassNameW(hwnd, cls_buff, 256)
+                cls_name = cls_buff.value
+
+                # Kiểm tra cửa sổ liên quan tới Ribbon Excel
+                if any(k in cls_name.lower() for k in ["netui", "mso", "ribbon", "excel"]):
+                    p_acc = ctypes.c_void_p()
+                    var_child = (ctypes.c_byte * 16)()
+                    res = oleacc.AccessibleObjectFromEvent(
+                        hwnd, idObject, idChild,
+                        ctypes.byref(p_acc), ctypes.byref(var_child)
+                    )
+                    if res == 0 and p_acc.value:
+                        acc = win32com.client.Dispatch(p_acc.value)
+                        tool_name = acc.accName(idChild) if hasattr(acc, 'accName') else ""
+                        if tool_name and len(tool_name) < 50:
+                            # Tránh spam sự kiện cùng 1 nút trong 1.2s
+                            now = time.time()
+                            if tool_name != self._last_ribbon_tool or (now - self._last_ribbon_time) > 1.2:
+                                self._last_ribbon_tool = tool_name
+                                self._last_ribbon_time = now
+                                self.record_tool_used(
+                                    self.current_workbook,
+                                    self.current_sheet,
+                                    self.current_cell,
+                                    f"Chọn công cụ: {tool_name}",
+                                    {"tool_name": tool_name, "source": "RibbonClick"}
+                                )
+            except Exception:
+                pass
+
+        hook_proc = WinEventProcType(win_event_callback)
+        hook = user32.SetWinEventHook(
+            EVENT_OBJECT_SELECTION,
+            EVENT_OBJECT_INVOKED,
+            0,
+            hook_proc,
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT
+        )
+
+        msg = ctypes.wintypes.MSG()
+        while self._running:
+            if user32.PeekMessageW(ctypes.byref(msg), 0, 0, 0, 1):
+                user32.TranslateMessage(ctypes.byref(msg))
+                user32.DispatchMessageW(ctypes.byref(msg))
+            time.sleep(0.02)
+
+        if hook:
+            user32.UnhookWinEvent(hook)
+        pythoncom.CoUninitialize()
 
     # =========================================================================
     # CÁC HÀM GHI NHẬN SỰ KIỆN CHUẨN XÁC
@@ -343,7 +441,7 @@ class UniversalExcelRecorder:
         event_type = "FORMULA_ENTRY" if is_formula else "CELL_VALUE_CHANGE"
 
         display_val = str(formula) if is_formula else str(val)
-        print(f"✍️ [{'GÕ HÀM/CÔNG THỨC' if is_formula else 'NHẬP DỮ LIỆU'}]: [{cell_address}] = {display_val}")
+        print(f"✍️ [{'GÕ HÀM/CÔNG THỨC' if is_formula else 'NHẬP NỘI DUNG'}]: Ô [{cell_address}] = {display_val}")
 
         str_val = str(val) if val is not None else ""
         has_error = any(err in str_val for err in ("#NAME?", "#VALUE!", "#REF!", "#N/A", "#DIV/0!"))
@@ -387,7 +485,7 @@ class UniversalExcelRecorder:
         self.event_logger.log_event(ev)
 
     def record_pause(self, wb_name: str, sheet_name: str, cell_address: str, duration: float):
-        print(f"⏱️ [TẠM DỪNG / NGẬP NGỪNG]: Dừng {duration:.1f}s tại ô [{cell_address}]")
+        print(f"⏱️ [TẠM DỪNG / SUY NGHĨ]: Dừng {duration:.1f}s tại ô [{cell_address}]")
         ev = RawEvent(
             event_type="STUDENT_PAUSE",
             session_id=self.current_session_id,
