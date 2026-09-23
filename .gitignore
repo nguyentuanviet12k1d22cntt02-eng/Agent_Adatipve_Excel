@@ -1,0 +1,24 @@
+# API Keys & Sensitive Secrets
+keys.txt
+*.key
+*.pem
+.env
+.env.*
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Office / Excel Temp Lock Files
+~$*.xlsx
+~$*.xls
+~$*.docx
+
+# System & IDE
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
