@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Play, Sparkles, Clock, AlertCircle, Edit3, MousePointer, CheckCircle, Radio } from 'lucide-react';
+import { Play, Sparkles, Clock, AlertCircle, Edit3, MousePointer, CheckCircle, Radio, Wrench, Palette, Type } from 'lucide-react';
 import { simulateEvent } from '../api';
 import { insertEventToSupabase } from '../supabase';
 
@@ -24,12 +24,12 @@ export default function LiveSimulator({ sessionId, onEventSimulated }) {
       try {
         await simulateEvent(sessionId, type, cell, step, metadata);
       } catch (e) {
-        console.warn('MySQL Local sync skipped:', e.message);
+        // Local MySQL sync
       }
 
       setToast({
         type: 'success',
-        msg: `⚡ Đã phát sự kiện [${type}] vào Supabase Realtime!`,
+        msg: `⚡ Đã phát sự kiện [${type}] vào Supabase: ${metadata.tool_name || metadata.formula || metadata.value || cell}!`,
       });
       setTimeout(() => setToast(null), 3000);
       if (onEventSimulated) {
@@ -51,70 +51,111 @@ export default function LiveSimulator({ sessionId, onEventSimulated }) {
       <div className="sim-toolbar">
         <div className="sim-toolbar-title">
           <Radio size={16} className="text-emerald-600 animate-pulse" />
-          <span>Mô phỏng phát sự kiện Telemetry (Supabase Realtime):</span>
+          <span>Mô phỏng thao tác Excel (Địa chỉ ô & Công cụ):</span>
         </div>
 
+        {/* 1. Chọn ô J10 */}
+        <button
+          className="btn-action btn-secondary"
+          style={{ padding: '6px 12px', fontSize: '0.78rem', color: 'var(--accent-sky)' }}
+          disabled={loading || !sessionId}
+          onClick={() =>
+            handleSimulate('CELL_SELECTION', 'J10', 1, {
+              sheet: 'Sheet1',
+              tool: 'Select Cell',
+            })
+          }
+          title="Chọn ô J10 trong bảng tính"
+        >
+          <MousePointer size={14} /> Chọn ô J10
+        </button>
+
+        {/* 2. Nhập 'xin chào' vào ô C9 */}
+        <button
+          className="btn-action btn-secondary"
+          style={{ padding: '6px 12px', fontSize: '0.78rem', color: 'var(--primary)' }}
+          disabled={loading || !sessionId}
+          onClick={() =>
+            handleSimulate('CELL_VALUE_CHANGE', 'C9', 1, {
+              sheet: 'Sheet1',
+              value: 'xin chào',
+              tool: 'Edit Cell',
+            })
+          }
+          title="Nhập giá trị 'xin chào' vào ô C9"
+        >
+          <Edit3 size={14} /> Nhập "xin chào" (C9)
+        </button>
+
+        {/* 3. Gõ hàm =IF(...) */}
+        <button
+          className="btn-action btn-secondary"
+          style={{ padding: '6px 12px', fontSize: '0.78rem', color: 'var(--accent-indigo)' }}
+          disabled={loading || !sessionId}
+          onClick={() =>
+            handleSimulate('FORMULA_ENTRY', 'D9', 1, {
+              sheet: 'Sheet1',
+              formula: '=IF(C8<5, "Trực nhật", "Thưởng 1 cuốn vở")',
+              has_error: false,
+              tool: 'Formula Bar',
+            })
+          }
+          title="Gõ hàm =IF(...) tại ô D9"
+        >
+          <Sparkles size={14} /> Gõ hàm =IF(...) (D9)
+        </button>
+
+        {/* 4. Dùng công cụ: Tô màu nền vàng */}
+        <button
+          className="btn-action btn-secondary"
+          style={{ padding: '6px 12px', fontSize: '0.78rem', color: '#9333ea' }}
+          disabled={loading || !sessionId}
+          onClick={() =>
+            handleSimulate('EXCEL_TOOL_USED', 'C9', 1, {
+              sheet: 'Sheet1',
+              tool_name: 'Tô màu nền (Fill Color)',
+              tool: 'Tô màu nền (Fill Color)',
+              color: '#FFFF00',
+            })
+          }
+          title="Sử dụng công cụ Tô màu vàng cho ô C9"
+        >
+          <Palette size={14} /> Tô màu nền ô (C9)
+        </button>
+
+        {/* 5. Dùng công cụ: Đổi Font Times New Roman */}
+        <button
+          className="btn-action btn-secondary"
+          style={{ padding: '6px 12px', fontSize: '0.78rem', color: '#0284c7' }}
+          disabled={loading || !sessionId}
+          onClick={() =>
+            handleSimulate('EXCEL_TOOL_USED', 'J10', 1, {
+              sheet: 'Sheet1',
+              tool_name: 'Đổi Font: Times New Roman 12pt',
+              tool: 'Đổi Font: Times New Roman 12pt',
+              font_size: 12,
+            })
+          }
+          title="Sử dụng công cụ đổi phông chữ Times New Roman"
+        >
+          <Type size={14} /> Đổi Font Times New Roman
+        </button>
+
+        {/* 6. Tạm dừng suy nghĩ */}
         <button
           className="btn-action btn-amber"
-          style={{ padding: '6px 14px', fontSize: '0.8rem' }}
+          style={{ padding: '6px 12px', fontSize: '0.78rem' }}
           disabled={loading || !sessionId}
           onClick={() =>
-            handleSimulate('MOUSE_HESITATION_START', 'D5', 2, {
-              hesitation_duration_sec: 4.8,
-              status: 'PROLONGED_IDLE',
-              mouse_coords: [540, 380],
+            handleSimulate('STUDENT_PAUSE', 'J10', 1, {
+              sheet: 'Sheet1',
+              pause_duration_sec: 12.5,
+              tool: 'Student Pause',
             })
           }
-          title="Ghi nhận sự kiện học viên dừng chuột 4.8s suy nghĩ vào Supabase"
+          title="Tạm dừng suy nghĩ 12.5 giây tại ô J10"
         >
-          <Clock size={14} /> Ngập ngừng 4.8s (D5)
-        </button>
-
-        <button
-          className="btn-action btn-secondary"
-          style={{ padding: '6px 14px', fontSize: '0.8rem', color: 'var(--accent-rose)' }}
-          disabled={loading || !sessionId}
-          onClick={() =>
-            handleSimulate('FORMULA_ENTRY', 'E5', 2, {
-              formula: '=VLOOKUP(A5, DanhMuc!A1:B10, 5, 0)',
-              error_type: '#REF!',
-              is_valid: false,
-            })
-          }
-          title="Ghi nhận lỗi gõ sai chỉ số cột VLOOKUP vào Supabase"
-        >
-          <AlertCircle size={14} /> Lỗi công thức (#REF!)
-        </button>
-
-        <button
-          className="btn-action btn-secondary"
-          style={{ padding: '6px 14px', fontSize: '0.8rem', color: 'var(--accent-sky)' }}
-          disabled={loading || !sessionId}
-          onClick={() =>
-            handleSimulate('CELL_SELECTION', 'C5', 2, {
-              previous_cell: 'B5',
-              range_address: 'C5:C5',
-            })
-          }
-          title="Ghi nhận di chuyển chuột chọn ô C5"
-        >
-          <MousePointer size={14} /> Chọn ô C5
-        </button>
-
-        <button
-          className="btn-action btn-secondary"
-          style={{ padding: '6px 14px', fontSize: '0.8rem', color: 'var(--primary)' }}
-          disabled={loading || !sessionId}
-          onClick={() =>
-            handleSimulate('CELL_VALUE_CHANGE', 'C5', 2, {
-              old_value: '',
-              new_value: '1500000',
-              data_type: 'number',
-            })
-          }
-          title="Ghi nhận gõ giá trị 1500000 vào ô C5"
-        >
-          <Edit3 size={14} /> Nhập số 1,500,000
+          <Clock size={14} /> Dừng suy nghĩ 12.5s (J10)
         </button>
       </div>
 

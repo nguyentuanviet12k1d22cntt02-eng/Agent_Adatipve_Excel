@@ -185,19 +185,20 @@ export function formatActionDescription(event) {
     case 'CELL_SELECTION':
       return `Đã chọn ô ${cell}`;
     case 'RANGE_SELECTION':
-      return `Đã bôi đen vùng ô ${cell}`;
+      return `Đã chọn vùng dữ liệu ${cell}`;
     case 'CELL_VALUE_CHANGE':
-      return `Nhập giá trị: "${meta.value !== undefined ? meta.value : '...'}" vào ô ${cell}`;
+      return `Nhập giá trị "${meta.value !== undefined ? meta.value : '...'}" vào ô ${cell}`;
     case 'FORMULA_ENTRY':
-      return `Gõ công thức hàm: ${meta.formula || meta.raw || '=...'} tại ô ${cell}`;
+      return `Gõ công thức hàm ${meta.formula || meta.raw || '=...'} tại ô ${cell}`;
+    case 'EXCEL_TOOL_USED':
+      return `Đã dùng công cụ: ${meta.tool_name || meta.tool || 'Định dạng'} tại ô ${cell}`;
+    case 'STUDENT_PAUSE':
     case 'MOUSE_HESITATION_START':
-      return `Tạm dừng ngập ngừng chuột ${meta.hesitation_duration_sec ? meta.hesitation_duration_sec + 's' : ''} tại ô ${cell}`;
-    case 'MOUSE_HESITATION_END':
-      return `Đã tiếp tục thao tác tại ô ${cell}`;
+      return `Tạm dừng suy nghĩ ${meta.pause_duration_sec || meta.hesitation_duration_sec ? (meta.pause_duration_sec || meta.hesitation_duration_sec) + 's' : ''} tại ô ${cell}`;
     case 'WORKBOOK_OPEN':
-      return `Mở file Excel: ${meta.workbook || meta.file || 'Bảng tính'}`;
-    case 'ERRATIC_MOUSE':
-      return `Di chuyển chuột hỗn loạn / bối rối quanh ô ${cell}`;
+      return `Mở file Excel: ${meta.workbook_name || meta.workbook || meta.file || 'Bảng tính'}`;
+    case 'SHEET_ACTIVATE':
+      return `Chuyển sang Sheet: ${meta.sheet || 'Sheet'}`;
     default:
       return `${event.event_type} tại ô ${cell}`;
   }

@@ -41,7 +41,8 @@ export default function App() {
   const [feedback, setFeedback] = useState([]);
 
   // Radar Live State (Thao tác Excel thời gian thực)
-  const [activeCell, setActiveCell] = useState('C5');
+  const [activeCell, setActiveCell] = useState('J10');
+  const [activeTool, setActiveTool] = useState('Chọn ô');
   const [activeStudent, setActiveStudent] = useState('Đang chờ...');
   const [activeWorkbook, setActiveWorkbook] = useState('Chưa mở file');
   const [activeSheet, setActiveSheet] = useState('Sheet1');
@@ -169,6 +170,19 @@ export default function App() {
           if (meta.sheet) setActiveSheet(meta.sheet);
           if (meta.student_name) setActiveStudent(meta.student_name);
 
+          // Cập nhật công cụ đã dùng
+          if (newEvt.event_type === 'EXCEL_TOOL_USED') {
+            setActiveTool(meta.tool_name || meta.tool || 'Định dạng');
+          } else if (newEvt.event_type === 'FORMULA_ENTRY') {
+            setActiveTool('Gõ công thức hàm');
+          } else if (newEvt.event_type === 'CELL_VALUE_CHANGE') {
+            setActiveTool('Nhập dữ liệu');
+          } else if (newEvt.event_type === 'CELL_SELECTION') {
+            setActiveTool('Chọn địa chỉ ô');
+          } else if (newEvt.event_type === 'STUDENT_PAUSE') {
+            setActiveTool('Tạm dừng suy nghĩ');
+          }
+
           // Nếu sự kiện thuộc phiên đang xem -> Chèn vào đầu danh sách sự kiện
           if (newEvt.session_id === selectedSessionIdRef.current) {
             setEvents((prev) => [newEvt, ...prev.filter(e => e.id !== newEvt.id)]);
@@ -262,6 +276,7 @@ export default function App() {
           activeWorkbook={activeWorkbook}
           activeSheet={activeSheet}
           activeCell={activeCell}
+          activeTool={activeTool}
           lastAction={lastAction}
           isRealtimeConnected={isRealtimeConnected}
         />

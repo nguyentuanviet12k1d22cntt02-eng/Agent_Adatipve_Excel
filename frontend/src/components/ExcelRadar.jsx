@@ -1,18 +1,18 @@
 import React from 'react';
-import { Radio, FileSpreadsheet, Layers, User, Zap } from 'lucide-react';
+import { Radio, FileSpreadsheet, Layers, User, Zap, Wrench } from 'lucide-react';
 
-export default function ExcelRadar({ activeStudent, activeWorkbook, activeSheet, activeCell, lastAction, isRealtimeConnected }) {
+export default function ExcelRadar({ activeStudent, activeWorkbook, activeSheet, activeCell, activeTool, lastAction, isRealtimeConnected }) {
   return (
     <div className="radar-card">
       <div className="radar-left">
         <div className="radar-badge-row">
           <span className="radar-live-tag">
             <span className={`status-dot ${isRealtimeConnected ? 'online' : 'offline'}`} />
-            {isRealtimeConnected ? 'Supabase Realtime Live' : 'Kết nối lại...'}
+            {isRealtimeConnected ? 'Supabase Realtime Live' : 'Đang kết nối...'}
           </span>
           <span style={{ fontSize: '0.8rem', color: 'var(--text-subtle)', display: 'flex', alignItems: 'center', gap: '4px' }}>
             <Radio size={14} className="text-emerald-500 animate-pulse" />
-            Đang bắt thao tác trực tiếp từ Excel
+            Giám sát thao tác Excel (Địa chỉ ô & Công cụ trực tiếp)
           </span>
         </div>
 
@@ -45,11 +45,20 @@ export default function ExcelRadar({ activeStudent, activeWorkbook, activeSheet,
         </div>
       </div>
 
-      <div className="radar-right">
+      <div className="radar-right" style={{ display: 'flex', gap: '14px', alignItems: 'center' }}>
+        {/* Hộp Địa Chỉ Ô Hiện Tại */}
         <div className="current-cell-box">
-          <div className="current-cell-lbl">Ô Excel Hiện Tại</div>
+          <div className="current-cell-lbl">Địa chỉ ô hiện tại</div>
           <div className="current-cell-val">
             {activeCell ? `[ ${activeCell} ]` : '[ -- ]'}
+          </div>
+        </div>
+
+        {/* Hộp Công Cụ Excel Vừa Dùng */}
+        <div className="current-cell-box" style={{ borderColor: '#c084fc', background: '#faf5ff' }}>
+          <div className="current-cell-lbl" style={{ color: '#7e22ce' }}>Công cụ gần nhất</div>
+          <div className="current-cell-val" style={{ color: '#9333ea', fontSize: '1rem', whiteSpace: 'nowrap' }}>
+            {activeTool ? activeTool : 'Chọn ô'}
           </div>
         </div>
       </div>

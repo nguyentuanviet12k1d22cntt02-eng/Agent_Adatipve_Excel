@@ -3,25 +3,26 @@ import {
   MousePointer, 
   Edit3, 
   HelpCircle, 
-  CheckCircle2, 
-  AlertTriangle, 
   Clock, 
   Code2, 
   FileSpreadsheet,
   ChevronRight, 
-  ChevronDown 
+  ChevronDown,
+  Wrench,
+  Layers
 } from 'lucide-react';
 
 export default function TimelineStream({ events, activeFilter, onFilterChange, latestEventId }) {
   const [expandedEventId, setExpandedEventId] = useState(null);
 
   const filters = [
-    { key: 'ALL', label: 'Tất cả' },
-    { key: 'CELL_SELECTION', label: 'Chọn ô (Selection)' },
-    { key: 'CELL_VALUE_CHANGE', label: 'Nhập số/chữ (Value)' },
-    { key: 'FORMULA_ENTRY', label: 'Gõ công thức (Formula)' },
-    { key: 'MOUSE_HESITATION_START', label: 'Ngập ngừng chuột' },
-    { key: 'WORKBOOK_OPEN', label: 'Mở file Excel' },
+    { key: 'ALL', label: 'Tất cả thao tác' },
+    { key: 'CELL_SELECTION', label: '🎯 Địa chỉ ô (Cells)' },
+    { key: 'EXCEL_TOOL_USED', label: '🛠️ Công cụ Excel (Tools)' },
+    { key: 'FORMULA_ENTRY', label: '⚡ Gõ công thức (Formula)' },
+    { key: 'CELL_VALUE_CHANGE', label: '✍️ Nhập dữ liệu (Value)' },
+    { key: 'STUDENT_PAUSE', label: '⏱️ Tạm dừng suy nghĩ' },
+    { key: 'WORKBOOK_OPEN', label: '📂 Mở file / Sheet' },
   ];
 
   const getEventBadgeMeta = (type) => {
@@ -33,7 +34,15 @@ export default function TimelineStream({ events, activeFilter, onFilterChange, l
           color: 'var(--accent-sky)',
           bg: 'var(--accent-sky-light)',
           rowClass: 'type-selection',
-          title: 'Chọn ô / Vùng dữ liệu',
+          title: 'Chọn địa chỉ ô',
+        };
+      case 'EXCEL_TOOL_USED':
+        return {
+          icon: <Wrench size={16} />,
+          color: '#9333ea',
+          bg: '#faf5ff',
+          rowClass: 'type-tool',
+          title: 'Công cụ Excel đã dùng',
         };
       case 'CELL_VALUE_CHANGE':
         return {
@@ -51,6 +60,7 @@ export default function TimelineStream({ events, activeFilter, onFilterChange, l
           rowClass: 'type-formula',
           title: 'Gõ công thức hàm',
         };
+      case 'STUDENT_PAUSE':
       case 'MOUSE_HESITATION_START':
       case 'MOUSE_HESITATION_END':
         return {
@@ -58,7 +68,7 @@ export default function TimelineStream({ events, activeFilter, onFilterChange, l
           color: 'var(--accent-amber)',
           bg: 'var(--accent-amber-light)',
           rowClass: 'type-hesitation',
-          title: 'Dừng thao tác (Ngập ngừng)',
+          title: 'Tạm dừng suy nghĩ tại ô',
         };
       case 'WORKBOOK_OPEN':
         return {
@@ -68,13 +78,13 @@ export default function TimelineStream({ events, activeFilter, onFilterChange, l
           rowClass: 'type-value',
           title: 'Mở file Excel',
         };
-      case 'ERRATIC_MOUSE_MOVEMENT':
+      case 'SHEET_ACTIVATE':
         return {
-          icon: <AlertTriangle size={16} />,
-          color: 'var(--accent-rose)',
-          bg: 'var(--accent-rose-light)',
-          rowClass: 'type-error',
-          title: 'Di chuột bối rối',
+          icon: <Layers size={16} />,
+          color: '#0284c7',
+          bg: '#f0f9ff',
+          rowClass: 'type-selection',
+          title: 'Chuyển đổi Sheet',
         };
       default:
         return {
@@ -96,7 +106,7 @@ export default function TimelineStream({ events, activeFilter, onFilterChange, l
       <div className="panel-header">
         <div className="panel-title">
           <Clock size={18} style={{ color: 'var(--primary)' }} />
-          <span>Dòng thao tác trực tiếp (Live Telemetry Stream) - {events.length} sự kiện</span>
+          <span>Lịch sử thao tác thực hành Excel ({events.length} sự kiện)</span>
         </div>
       </div>
 
@@ -117,7 +127,7 @@ export default function TimelineStream({ events, activeFilter, onFilterChange, l
       <div className="timeline-stream">
         {events.length === 0 ? (
           <div style={{ padding: '36px', textAlign: 'center', color: 'var(--text-muted)' }}>
-            Chưa có sự kiện nào cho phiên này hoặc chưa khớp bộ lọc.
+            Chưa có thao tác nào khớp với bộ lọc hiện tại.
           </div>
         ) : (
           events.map((evt) => {
@@ -147,11 +157,17 @@ export default function TimelineStream({ events, activeFilter, onFilterChange, l
             metaData = metaData || {};
 
             let previewText = '';
-            if (metaData.formula) previewText = `Công thức: ${metaData.formula}`;
-            else if (metaData.value !== undefined) previewText = `Giá trị: ${metaData.value}`;
-            else if (metaData.workbook || metaData.workbook_name) previewText = `File: ${metaData.workbook || metaData.workbook_name}`;
-            else if (metaData.hesitation_duration_sec) previewText = `Dừng: ${Number(metaData.hesitation_duration_sec).toFixed(1)}s`;
-            else if (metaData.idle_duration) previewText = `Dừng: ${Number(metaData.idle_duration).toFixed(1)}s`;
+            if (metaData.tool_name || metaData.tool) {
+              previewText = `Công cụ: ${metaData.tool_name || metaData.tool}`;
+            } else if (metaData.formula) {
+              previewText = `Công thức: ${metaData.formula}`;
+            } else if (metaData.value !== undefined) {
+              previewText = `Giá trị: "${metaData.value}"`;
+            } else if (metaData.workbook_name || metaData.workbook) {
+              previewText = `Bảng tính: ${metaData.workbook_name || metaData.workbook}`;
+            } else if (metaData.pause_duration_sec) {
+              previewText = `Dừng suy nghĩ: ${Number(metaData.pause_duration_sec).toFixed(1)}s`;
+            }
 
             return (
               <div key={evt.id} className={`event-row ${meta.rowClass} ${isLatest ? 'new-realtime-event' : ''}`}>
@@ -166,12 +182,16 @@ export default function TimelineStream({ events, activeFilter, onFilterChange, l
                   <div className="event-headline">
                     <div className="event-type-title">
                       <span>{meta.title}</span>
-                      {evt.cell && <span className="event-cell-tag">[{evt.cell}]</span>}
+                      {evt.cell && (
+                        <span className="event-cell-tag" style={{ background: '#e0f2fe', color: '#0369a1', fontWeight: 800 }}>
+                          [{evt.cell}]
+                        </span>
+                      )}
                     </div>
                     <span className="event-time">{timeStr}</span>
                   </div>
 
-                  <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ fontSize: '0.84rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <span>
                       {previewText ? (
                         <strong style={{ color: 'var(--text-main)', fontFamily: 'var(--font-mono)' }}>{previewText}</strong>
@@ -198,12 +218,11 @@ export default function TimelineStream({ events, activeFilter, onFilterChange, l
                     </button>
                   </div>
 
-                  {isExpanded && evt.metadata && (
-                    <pre className="event-meta-json">
-                      {typeof evt.metadata === 'object'
-                        ? JSON.stringify(evt.metadata, null, 2)
-                        : evt.metadata}
-                    </pre>
+                  {/* Chi tiết Payload JSON mở rộng */}
+                  {isExpanded && (
+                    <div className="event-meta-json">
+                      <pre>{JSON.stringify(metaData, null, 2)}</pre>
+                    </div>
                   )}
                 </div>
               </div>
