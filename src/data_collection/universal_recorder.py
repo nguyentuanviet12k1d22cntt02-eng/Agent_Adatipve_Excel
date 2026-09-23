@@ -434,12 +434,6 @@ class UniversalExcelRecorder:
                 if "rejected" not in err_str and "-2147418111" not in err_str:
                     self.log_error(f"Lỗi kiểm tra định dạng ô [{cell_addr}]", e)
 
-            # 7. Tạm dừng suy nghĩ (> 8s không thao tác tại ô)
-            idle_sec = time.time() - self._last_action_time
-            if idle_sec >= 8.0 and self._pause_logged_for_cell != cell_addr:
-                self._pause_logged_for_cell = cell_addr
-                self.record_pause(wb_name, sheet_name, cell_addr, idle_sec)
-
         except Exception as e:
             err_str = str(e).lower()
             if "rejected" not in err_str and "-2147418111" not in err_str:
