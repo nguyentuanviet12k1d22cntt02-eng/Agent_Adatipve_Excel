@@ -257,6 +257,7 @@ class UniversalExcelRecorder:
     def record_workbook_open(self, wb_name: str, wb_path: str):
         self.current_workbook = wb_name
         print(f"📂 [EXCEL MỞ FILE]: {wb_name}")
+        self.event_logger.update_session_lesson(self.current_session_id, wb_name)
         ev = RawEvent(
             event_type="WORKBOOK_OPEN",
             session_id=self.current_session_id,

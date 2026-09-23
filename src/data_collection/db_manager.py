@@ -56,8 +56,8 @@ class DatabaseManager:
                 print(f"[DatabaseManager] Không thể kết nối MySQL ({e}). Tự động fallback sang SQLite.")
                 self.mysql_available = False
 
-        if not self.mysql_available and not self.supabase_available or db_path is not None:
-            self._init_sqlite()
+        # Luôn khởi tạo bảng SQLite dự phòng để đảm bảo fallback an toàn
+        self._init_sqlite()
 
     def get_supabase_connection(self):
         """Tạo kết nối tới máy chủ Supabase PostgreSQL."""
@@ -167,13 +167,13 @@ class DatabaseManager:
                 with conn.cursor() as cursor:
                     rows = [
                         (
-                            e.get("session_id", ""),
+                            str(e.get("session_id", ""))[:250],
                             float(e.get("timestamp", time.time())),
                             str(e.get("iso_time", "")),
-                            str(e.get("event_type", "")),
-                            str(e.get("lesson_id", "")),
+                            str(e.get("event_type", ""))[:100],
+                            str(e.get("lesson_id", ""))[:250],
                             int(e.get("step_index", 0)),
-                            str(e.get("cell", "")),
+                            str(e.get("cell", ""))[:50],
                             json.dumps(e.get("metadata", {}), ensure_ascii=False),
                         )
                         for e in events
@@ -194,13 +194,13 @@ class DatabaseManager:
                 with conn.cursor() as cursor:
                     rows = [
                         (
-                            e.get("session_id", ""),
+                            str(e.get("session_id", ""))[:250],
                             float(e.get("timestamp", time.time())),
                             str(e.get("iso_time", "")),
-                            str(e.get("event_type", "")),
-                            str(e.get("lesson_id", "")),
+                            str(e.get("event_type", ""))[:100],
+                            str(e.get("lesson_id", ""))[:250],
                             int(e.get("step_index", 0)),
-                            str(e.get("cell", "")),
+                            str(e.get("cell", ""))[:50],
                             json.dumps(e.get("metadata", {}), ensure_ascii=False),
                         )
                         for e in events
@@ -222,13 +222,13 @@ class DatabaseManager:
             cursor = conn.cursor()
             rows = [
                 (
-                    e.get("session_id", ""),
+                    str(e.get("session_id", ""))[:250],
                     float(e.get("timestamp", time.time())),
                     str(e.get("iso_time", "")),
-                    str(e.get("event_type", "")),
-                    str(e.get("lesson_id", "")),
+                    str(e.get("event_type", ""))[:100],
+                    str(e.get("lesson_id", ""))[:250],
                     int(e.get("step_index", 0)),
-                    str(e.get("cell", "")),
+                    str(e.get("cell", ""))[:50],
                     json.dumps(e.get("metadata", {}), ensure_ascii=False),
                 )
                 for e in events
