@@ -2,15 +2,15 @@
 Universal Excel Telemetry Recorder: Bộ ghi nhận thao tác Excel chuyên sâu chạy ngầm.
 Dành cho phòng máy học tập & Nghiên cứu hành vi:
 - Chỉ bắt đầu ghi nhận KHI VÀ CHỈ KHI người học MỞ FILE EXCEL.
-- KHÔNG dùng bất kỳ hook hệ thống hay hook chuột nào can thiệp OS (chuột hoàn toàn mượt mà, an toàn 100%).
-- Bắn log trực tiếp lên màn hình terminal để dễ dàng theo dõi theo thời gian thực:
-  + Địa chỉ ô được chọn: 🎯 [CHỌN ĐỊA CHỈ Ô]: [C8]
-  + Nhập liệu giá trị: ✍️ [NHẬP NỘI DUNG]: Ô [C8] = "Hello"
+- Tuyệt đối KHÔNG dùng bất kỳ hook chuột hay hook hệ thống nào (chuột mượt 100%, an toàn tuyệt đối).
+- Chỉ ghi nhận đúng 1 lần khi người dùng THẬT SỰ thao tác (chọn ô khác, nhập dữ liệu mới, chọn công cụ):
+  + Địa chỉ ô được chọn: 🎯 [CHỌN ĐỊA CHỈ Ô]: [C8] (Chỉ bắn khi click sang ô khác)
+  + Nhập liệu giá trị: ✍️ [NHẬP NỘI DUNG]: Ô [C8] = "Hello" (Bắn khi vừa gõ xong)
   + Gõ công thức hàm: ⚡ [GÕ CÔNG THỨC]: Ô [C8] = =SUM(A1:A5)
   + Tên công cụ / Định dạng: 🛠️ [CÔNG CỤ EXCEL]: In đậm chữ (Bold) tại ô [C8]
   + Mở bảng tính / Đổi Sheet: 📂 [MỞ BẢNG TÍNH], 📑 [CHUYỂN SHEET]
-  + Tạm dừng suy nghĩ tại ô: ⏱️ [TẠM DỪNG / SUY NGHĨ]: Dừng 8.1s tại ô [C8]
-- Tự động đồng bộ vào Supabase Cloud (WebSockets Realtime) & MySQL.
+- Tuyệt đối KHÔNG spam công cụ ảo, KHÔNG spam tên ô hay nút trình duyệt web.
+- Tự động đồng bộ tức thì vào Supabase Cloud (WebSockets Realtime) & MySQL.
 """
 
 import os
@@ -35,11 +35,6 @@ import win32com.client
 from src.data_collection.db_manager import DatabaseManager
 from src.data_collection.event_logger import EventLogger
 from src.sensors.base_sensor import RawEvent
-
-try:
-    import uiautomation as auto
-except Exception:
-    auto = None
 
 
 def clean_address(raw_obj) -> str:
@@ -77,9 +72,8 @@ class UniversalExcelRecorder:
         self._running = False
         self._excel_active = False
         self._com_thread = None
-        self._ribbon_thread = None
 
-        # Bộ nhớ đệm lưu trạng thái ô và thao tác
+        # Bộ nhớ đệm lưu trạng thái ô và thao tác để chỉ ghi nhận khi THẬT SỰ THAY ĐỔI
         self._last_sel = None
         self._last_wb_sel = None
         self._last_sheet_sel = None
@@ -91,19 +85,14 @@ class UniversalExcelRecorder:
 
         self._cell_values = {}      # key: (wb, sheet, cell) -> (val_str, formula_str)
         self._cell_formats = {}     # key: (wb, sheet, cell) -> tuple format
-        self._last_action_time = time.time()
-        self._pause_logged_for_cell = None
-
-        # Bộ nhớ chống lặp sự kiện Ribbon
-        self._last_ribbon_tool = ""
-        self._last_ribbon_time = 0
+        self._recent_tools = {}     # key: (cell, tool_name) -> timestamp debounce 1.5s
 
     def log_error(self, message: str, exc: Optional[Exception] = None):
-        """Ghi nhận lỗi ra console và recorder_error.log (bỏ qua mã COM busy khi gõ phím)."""
+        """Ghi nhận lỗi có chọn lọc ra console và recorder_error.log (bỏ qua trạng thái COM bình thường)."""
         if exc:
             err_str = str(exc).lower()
-            if "rejected" in err_str or "-2147418111" in err_str:
-                return  # Trạng thái bình thường khi người dùng đang nhập phím
+            if any(k in err_str for k in ("rejected", "-2147418111", "activesheet", "busy", "disconnected")):
+                return  # Trạng thái COM bình thường khi người dùng đang nhập phím hoặc Excel đang bận
             err_detail = f"{message}: {exc}"
         else:
             err_detail = message
@@ -137,16 +126,12 @@ class UniversalExcelRecorder:
         print("   ⏸️  Trạng thái: Đang chờ người dùng mở file Excel...")
         print("   💡 Tự động kích hoạt ghi nhận ngay khi mở Excel.")
         print("   🚀 Không dùng hook chuột (chuột mượt 100%, không bao giờ bị đơ).")
-        print("   📋 Toàn bộ thao tác sẽ bắn log trực tiếp tại terminal này!")
+        print("   🎯 Chỉ ghi nhận đúng 1 lần khi bạn CLICK CHỌN Ô KHÁC hoặc BẤM CÔNG CỤ!")
         print("=" * 80)
 
-        # 1. Luồng giám sát COM & Trạng thái ô tính (Selection, Value, Formula, Format)
+        # Luồng giám sát COM chuẩn xác: Selection, Value, Formula, Formatting Tool
         self._com_thread = threading.Thread(target=self._excel_monitor_loop, daemon=True)
         self._com_thread.start()
-
-        # 2. Luồng giám sát thanh Ribbon qua UI Automation an toàn tuyệt đối (không dùng hook)
-        self._ribbon_thread = threading.Thread(target=self._ribbon_monitor_loop, daemon=True)
-        self._ribbon_thread.start()
 
     def _register_student(self):
         now_dt = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -163,8 +148,8 @@ class UniversalExcelRecorder:
                         (self.student_id, self.student_name, now_dt),
                     )
                 conn.close()
-            except Exception as e:
-                self.log_error("Lỗi đăng ký học viên MySQL", e)
+            except Exception:
+                pass
 
         if self.db_manager.supabase_available:
             try:
@@ -179,8 +164,8 @@ class UniversalExcelRecorder:
                         (self.student_id, self.student_name, now_dt),
                     )
                 conn.close()
-            except Exception as e:
-                self.log_error("Lỗi đăng ký học viên Supabase", e)
+            except Exception:
+                pass
 
     def _excel_monitor_loop(self):
         """Vòng lặp giám sát Excel qua COM: chỉ ghi nhận khi Excel mở."""
@@ -226,10 +211,10 @@ class UniversalExcelRecorder:
                         self._excel_active = False
                         print("\n💤 [EXCEL CHƯA MỞ HOẶC ĐÃ ĐÓNG]: Đang chờ mở file...")
 
-            except Exception as e:
-                self.log_error("Lỗi vòng lặp giám sát Excel", e)
+            except Exception:
+                pass
 
-            time.sleep(0.12)  # Quét cực nhạy 120ms
+            time.sleep(0.12)  # Quét nhạy 120ms
 
         pythoncom.CoUninitialize()
 
@@ -241,17 +226,26 @@ class UniversalExcelRecorder:
                 return
 
             wb_name = active_wb.Name
-            active_sheet = excel_app.ActiveSheet
-            sheet_name = active_sheet.Name if active_sheet else "Sheet1"
+            active_sheet = None
+            try:
+                active_sheet = excel_app.ActiveSheet
+            except Exception:
+                pass
+
+            sheet_name = self._last_sheet or "Sheet1"
+            try:
+                if active_sheet:
+                    sheet_name = str(active_sheet.Name)
+            except Exception:
+                pass
 
             # 1. Mở file hoặc chuyển file
             if wb_name != self._last_wb:
                 self._last_wb = wb_name
                 try:
                     wb_path = active_wb.FullName
-                except Exception as e:
+                except Exception:
                     wb_path = wb_name
-                    self.log_error("Không lấy được FullName của file Excel", e)
                 self.record_workbook_open(wb_name, wb_path)
 
             # 2. Chuyển Sheet
@@ -269,8 +263,6 @@ class UniversalExcelRecorder:
                     self._is_editing = True
                     if self._last_cell_addr:
                         self._editing_cell = self._last_cell_addr
-                else:
-                    self.log_error("Lỗi đọc ActiveCell", e)
                 return
 
             if not active_cell:
@@ -283,18 +275,16 @@ class UniversalExcelRecorder:
             sel_range = None
             try:
                 sel_range = excel_app.Selection
-            except Exception as e:
-                self.log_error("Lỗi đọc Selection", e)
+            except Exception:
+                pass
 
             sel_addr = clean_address(sel_range) or cell_addr
 
-            # 4. Kiểm tra chọn ô / vùng chọn (CELL_SELECTION)
+            # 4. CHỈ BẮN SỰ KIỆN KHI NGƯỜI DÙNG CLICK CHỌN Ô / VÙNG KHÁC (CELL_SELECTION)
             if sel_addr and (sel_addr != self._last_sel or wb_name != self._last_wb_sel or sheet_name != self._last_sheet_sel):
                 self._last_sel = sel_addr
                 self._last_wb_sel = wb_name
                 self._last_sheet_sel = sheet_name
-                self._last_action_time = time.time()
-                self._pause_logged_for_cell = None
                 self.record_selection(wb_name, sheet_name, sel_addr)
 
             # 5. KIỂM TRA NỘI DUNG Ô & CÔNG THỨC HÀM (CELL_VALUE_CHANGE / FORMULA_ENTRY)
@@ -319,63 +309,83 @@ class UniversalExcelRecorder:
             except Exception:
                 pass
 
-            for target_addr in pending_cells:
-                try:
-                    target_cell = active_sheet.Range(target_addr)
-                    cur_val = target_cell.Value
-                    cur_formula = target_cell.Formula
+            if active_sheet:
+                for target_addr in pending_cells:
+                    try:
+                        target_cell = active_sheet.Range(target_addr)
+                        cur_val = target_cell.Value
+                        cur_formula = target_cell.Formula
 
-                    val_str = str(cur_val).strip() if cur_val is not None else ""
-                    formula_str = str(cur_formula).strip() if cur_formula is not None else ""
+                        val_str = str(cur_val).strip() if cur_val is not None else ""
+                        formula_str = str(cur_formula).strip() if cur_formula is not None else ""
 
-                    cell_key = (wb_name, sheet_name, target_addr)
-                    old_data = self._cell_values.get(cell_key)
+                        cell_key = (wb_name, sheet_name, target_addr)
+                        old_data = self._cell_values.get(cell_key)
 
-                    if old_data is not None:
-                        old_val, old_formula = old_data
-                        if val_str != old_val or formula_str != old_formula:
-                            self._last_action_time = time.time()
-                            self._pause_logged_for_cell = None
-                            self.record_cell_change(wb_name, sheet_name, target_addr, cur_val, cur_formula)
+                        if old_data is not None:
+                            old_val, old_formula = old_data
+                            if val_str != old_val or formula_str != old_formula:
+                                self.record_cell_change(wb_name, sheet_name, target_addr, cur_val, cur_formula)
+                                self._cell_values[cell_key] = (val_str, formula_str)
+                        else:
                             self._cell_values[cell_key] = (val_str, formula_str)
-                    else:
-                        self._cell_values[cell_key] = (val_str, formula_str)
-                        # Nếu ô trước đó vừa được gõ dữ liệu mới lần đầu tiên
-                        if target_addr != cell_addr and (val_str != "" or formula_str != ""):
-                            self._last_action_time = time.time()
-                            self._pause_logged_for_cell = None
-                            self.record_cell_change(wb_name, sheet_name, target_addr, cur_val, cur_formula)
+                            # Nếu ô trước đó vừa được gõ dữ liệu mới lần đầu tiên
+                            if target_addr != cell_addr and (val_str != "" or formula_str != ""):
+                                self.record_cell_change(wb_name, sheet_name, target_addr, cur_val, cur_formula)
 
-                except Exception as e:
-                    err_str = str(e).lower()
-                    if "rejected" in err_str or "-2147418111" in err_str:
-                        self._is_editing = True
-                        self._editing_cell = target_addr
-                    else:
-                        self.log_error(f"Lỗi đọc nội dung ô [{target_addr}]", e)
+                    except Exception as e:
+                        err_str = str(e).lower()
+                        if "rejected" in err_str or "-2147418111" in err_str:
+                            self._is_editing = True
+                            self._editing_cell = target_addr
 
             # Cập nhật địa chỉ ô cuối cùng
             self._last_cell_addr = cell_addr
 
-            # 6. KIỂM TRA CÔNG CỤ & ĐỊNH DẠNG ĐÃ DÙNG (EXCEL_TOOL_USED)
+            # 6. KIỂM TRA CÔNG CỤ & ĐỊNH DẠNG ĐÃ DÙNG (EXCEL_TOOL_USED) - CHỈ PHÁT KHI THAY ĐỔI
             try:
-                f = active_cell.Font
-                font_name = str(f.Name) if hasattr(f, 'Name') and f.Name else ""
-                font_size = float(f.Size) if hasattr(f, 'Size') and f.Size else 0.0
-                font_bold = bool(f.Bold) if hasattr(f, 'Bold') and f.Bold is not None else False
-                font_italic = bool(f.Italic) if hasattr(f, 'Italic') and f.Italic is not None else False
-                font_underline = int(f.Underline) if hasattr(f, 'Underline') and f.Underline is not None else -4142
-                font_color = int(f.Color) if hasattr(f, 'Color') and f.Color is not None else 0
+                font_name = ""
+                font_size = 0.0
+                font_bold = False
+                font_italic = False
+                font_underline = -4142
+                font_color = 0
 
-                interior = active_cell.Interior
-                interior_color = int(interior.Color) if hasattr(interior, 'Color') and interior.Color is not None else 0
-                interior_index = int(interior.ColorIndex) if hasattr(interior, 'ColorIndex') and interior.ColorIndex is not None else -4142
+                try:
+                    f = active_cell.Font
+                    if f:
+                        font_name = str(f.Name) if hasattr(f, 'Name') and f.Name else ""
+                        font_size = float(f.Size) if hasattr(f, 'Size') and f.Size else 0.0
+                        font_bold = bool(f.Bold) if hasattr(f, 'Bold') and f.Bold is not None else False
+                        font_italic = bool(f.Italic) if hasattr(f, 'Italic') and f.Italic is not None else False
+                        font_underline = int(f.Underline) if hasattr(f, 'Underline') and f.Underline is not None else -4142
+                        font_color = int(f.Color) if hasattr(f, 'Color') and f.Color is not None else 0
+                except Exception:
+                    pass
 
-                num_format = str(active_cell.NumberFormat) if hasattr(active_cell, 'NumberFormat') else ""
-                h_align = int(active_cell.HorizontalAlignment) if hasattr(active_cell, 'HorizontalAlignment') and active_cell.HorizontalAlignment is not None else 0
-                v_align = int(active_cell.VerticalAlignment) if hasattr(active_cell, 'VerticalAlignment') and active_cell.VerticalAlignment is not None else 0
-                wrap_text = bool(active_cell.WrapText) if hasattr(active_cell, 'WrapText') and active_cell.WrapText is not None else False
-                merge_cells = bool(active_cell.MergeCells) if hasattr(active_cell, 'MergeCells') and active_cell.MergeCells is not None else False
+                interior_color = 0
+                interior_index = -4142
+                try:
+                    interior = active_cell.Interior
+                    if interior:
+                        interior_color = int(interior.Color) if hasattr(interior, 'Color') and interior.Color is not None else 0
+                        interior_index = int(interior.ColorIndex) if hasattr(interior, 'ColorIndex') and interior.ColorIndex is not None else -4142
+                except Exception:
+                    pass
+
+                num_format = ""
+                h_align = 0
+                v_align = 0
+                wrap_text = False
+                merge_cells = False
+                try:
+                    num_format = str(active_cell.NumberFormat) if hasattr(active_cell, 'NumberFormat') else ""
+                    h_align = int(active_cell.HorizontalAlignment) if hasattr(active_cell, 'HorizontalAlignment') and active_cell.HorizontalAlignment is not None else 0
+                    v_align = int(active_cell.VerticalAlignment) if hasattr(active_cell, 'VerticalAlignment') and active_cell.VerticalAlignment is not None else 0
+                    wrap_text = bool(active_cell.WrapText) if hasattr(active_cell, 'WrapText') and active_cell.WrapText is not None else False
+                    merge_cells = bool(active_cell.MergeCells) if hasattr(active_cell, 'MergeCells') and active_cell.MergeCells is not None else False
+                except Exception:
+                    pass
 
                 has_borders = False
                 try:
@@ -390,89 +400,60 @@ class UniversalExcelRecorder:
                 cell_fmt_key = (wb_name, sheet_name, cell_addr)
                 old_fmt = self._cell_formats.get(cell_fmt_key)
 
+                # Cập nhật cache format ngay lập tức để không bao giờ bị lặp lại trong chu kỳ sau
+                self._cell_formats[cell_fmt_key] = cur_fmt
+
                 if old_fmt is not None and old_fmt != cur_fmt:
                     (
                         old_fn, old_fs, old_b, old_it, old_u, old_fc,
                         old_ic, old_ii, old_nf, old_ha, old_va, old_wt, old_mc, old_bd
                     ) = old_fmt
-                    self._last_action_time = time.time()
+
+                    now = time.time()
+                    # Hàm trợ giúp phát sự kiện công cụ có chống trùng lặp 1.5s
+                    def emit_tool(tool_name: str, details: Dict[str, Any]):
+                        t_key = (cell_addr, tool_name)
+                        if t_key in self._recent_tools and (now - self._recent_tools[t_key]) < 1.5:
+                            return
+                        self._recent_tools[t_key] = now
+                        self.record_tool_used(wb_name, sheet_name, cell_addr, tool_name, details)
 
                     if font_bold != old_b and font_bold:
-                        self.record_tool_used(wb_name, sheet_name, cell_addr, "In đậm chữ (Bold)", {"tool": "Bold", "value": True})
+                        emit_tool("In đậm chữ (Bold)", {"tool": "Bold", "value": True})
                     if font_italic != old_it and font_italic:
-                        self.record_tool_used(wb_name, sheet_name, cell_addr, "In nghiêng (Italic)", {"tool": "Italic", "value": True})
+                        emit_tool("In nghiêng (Italic)", {"tool": "Italic", "value": True})
                     if font_underline != old_u and font_underline != -4142:
-                        self.record_tool_used(wb_name, sheet_name, cell_addr, "Gạch chân (Underline)", {"tool": "Underline", "value": True})
+                        emit_tool("Gạch chân (Underline)", {"tool": "Underline", "value": True})
                     if font_name != old_fn and font_name and old_fn:
-                        self.record_tool_used(wb_name, sheet_name, cell_addr, f"Đổi Phông chữ: {font_name}", {"tool": "FontName", "value": font_name})
+                        emit_tool(f"Đổi Phông chữ: {font_name}", {"tool": "FontName", "value": font_name})
                     if font_size != old_fs and font_size > 0 and old_fs > 0:
-                        self.record_tool_used(wb_name, sheet_name, cell_addr, f"Đổi Cỡ chữ: {font_size}pt", {"tool": "FontSize", "value": font_size})
+                        emit_tool(f"Đổi Cỡ chữ: {font_size}pt", {"tool": "FontSize", "value": font_size})
                     if font_color != old_fc and font_color > 0 and old_fc > 0:
-                        self.record_tool_used(wb_name, sheet_name, cell_addr, "Đổi Màu chữ (Font Color)", {"tool": "FontColor", "color_code": font_color})
+                        emit_tool("Đổi Màu chữ (Font Color)", {"tool": "FontColor", "color_code": font_color})
                     if interior_index != old_ii and interior_index != -4142:
-                        self.record_tool_used(wb_name, sheet_name, cell_addr, "Tô màu nền ô (Fill Color)", {"tool": "FillColor", "color_code": interior_color})
+                        emit_tool("Tô màu nền ô (Fill Color)", {"tool": "FillColor", "color_code": interior_color})
                     if num_format != old_nf and num_format not in ("General", "@", "") and old_nf:
-                        self.record_tool_used(wb_name, sheet_name, cell_addr, f"Định dạng số: {num_format}", {"tool": "NumberFormat", "format": num_format})
+                        emit_tool(f"Định dạng số: {num_format}", {"tool": "NumberFormat", "format": num_format})
                     if h_align != old_ha and old_ha != 0:
                         align_names = {-4108: "Căn giữa (Center)", -4131: "Căn trái (Align Left)", -4152: "Căn phải (Align Right)", -4130: "Căn đều (Justify)"}
                         lbl = align_names.get(h_align, f"Căn lề ngang: {h_align}")
-                        self.record_tool_used(wb_name, sheet_name, cell_addr, lbl, {"tool": "HorizontalAlignment", "value": h_align})
+                        emit_tool(lbl, {"tool": "HorizontalAlignment", "value": h_align})
                     if v_align != old_va and old_va != 0:
                         valign_names = {-4108: "Căn giữa dọc (Middle Align)", -4160: "Căn trên cùng (Top Align)", -4107: "Căn dưới đáy (Bottom Align)"}
                         lbl = valign_names.get(v_align, f"Căn lề dọc: {v_align}")
-                        self.record_tool_used(wb_name, sheet_name, cell_addr, lbl, {"tool": "VerticalAlignment", "value": v_align})
+                        emit_tool(lbl, {"tool": "VerticalAlignment", "value": v_align})
                     if wrap_text != old_wt and wrap_text:
-                        self.record_tool_used(wb_name, sheet_name, cell_addr, "Ngắt dòng tự động (Wrap Text)", {"tool": "WrapText", "value": True})
+                        emit_tool("Ngắt dòng tự động (Wrap Text)", {"tool": "WrapText", "value": True})
                     if merge_cells != old_mc and merge_cells:
-                        self.record_tool_used(wb_name, sheet_name, cell_addr, "Gộp & Căn giữa ô (Merge & Center)", {"tool": "MergeCells", "value": True})
+                        emit_tool("Gộp & Căn giữa ô (Merge & Center)", {"tool": "MergeCells", "value": True})
                     if has_borders != old_bd and has_borders:
-                        self.record_tool_used(wb_name, sheet_name, cell_addr, "Kẻ viền khung bảng (Borders)", {"tool": "Borders", "value": True})
+                        emit_tool("Kẻ viền khung bảng (Borders)", {"tool": "Borders", "value": True})
 
-                self._cell_formats[cell_fmt_key] = cur_fmt
-            except Exception as e:
-                err_str = str(e).lower()
-                if "rejected" not in err_str and "-2147418111" not in err_str:
-                    self.log_error(f"Lỗi kiểm tra định dạng ô [{cell_addr}]", e)
-
-        except Exception as e:
-            err_str = str(e).lower()
-            if "rejected" not in err_str and "-2147418111" not in err_str:
-                self.log_error("Lỗi trong chu kỳ quét Excel", e)
-
-    def _ribbon_monitor_loop(self):
-        """Giám sát công cụ Ribbon qua UI Automation an toàn tuyệt đối, KHÔNG can thiệp chuột hệ thống."""
-        if not auto:
-            return
-        try:
-            auto.InitializeUIAutomationInCurrentThread()
-        except Exception:
-            pass
-
-        while self._running:
-            try:
-                if self._excel_active:
-                    ctrl = auto.GetFocusedControl()
-                    if ctrl and ctrl.Name:
-                        name = ctrl.Name.strip()
-                        ctrl_type = getattr(ctrl, "ControlTypeName", "")
-                        # Nếu phần tử thuộc thanh công cụ / Tab / Nút Ribbon
-                        if name and len(name) < 60 and any(t in ctrl_type for t in ("Button", "Tab", "Item", "Menu")):
-                            ignore = {"ribbon", "lower ribbon", "ribbon tabs", "ribbon bar", "desktop", "excel", "sheet"}
-                            if name.lower() not in ignore:
-                                now = time.time()
-                                if name != self._last_ribbon_tool or (now - self._last_ribbon_time) > 1.2:
-                                    self._last_ribbon_tool = name
-                                    self._last_ribbon_time = now
-                                    self.record_tool_used(
-                                        self.current_workbook,
-                                        self.current_sheet,
-                                        self.current_cell,
-                                        f"Chọn công cụ: {name}",
-                                        {"tool_name": name, "source": "RibbonFocus", "control_type": ctrl_type}
-                                    )
             except Exception:
                 pass
-            time.sleep(0.25)
+
+        except Exception:
+            pass
 
     # =========================================================================
     # CÁC HÀM GHI NHẬN SỰ KIỆN CHUẨN XÁC & BẮN LOG RA TERMINAL
@@ -568,22 +549,6 @@ class UniversalExcelRecorder:
                 "tool_name": tool_name,
                 "tool": tool_name,
                 **tool_details,
-            },
-        )
-        self.event_logger.log_event(ev)
-
-    def record_pause(self, wb_name: str, sheet_name: str, cell_address: str, duration: float):
-        print(f"⏱️ [TẠM DỪNG / SUY NGHĨ]: Dừng {duration:.1f}s tại ô [{cell_address}]")
-        ev = RawEvent(
-            event_type="STUDENT_PAUSE",
-            session_id=self.current_session_id,
-            lesson_id=wb_name,
-            cell=cell_address,
-            metadata={
-                "sheet": sheet_name,
-                "workbook": wb_name,
-                "pause_duration_sec": round(duration, 1),
-                "tool": "Hesitation",
             },
         )
         self.event_logger.log_event(ev)
