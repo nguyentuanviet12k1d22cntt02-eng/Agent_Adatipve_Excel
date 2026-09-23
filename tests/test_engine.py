@@ -86,13 +86,15 @@ def test_evaluator_bai_08():
 
 
 def test_tutor_agent_reflection():
+    from unittest.mock import patch
     print("\n=== TEST TUTOR AGENT REFLECTION ===")
-    agent = TutorAgent()  # Offline mode fallback
+    agent = TutorAgent()
     q = "Tại sao trong số điện thoại số 0 ở đầu lại bắt buộc phải giữ và phải chọn Text?"
     ans = "Vì nếu để số học thì số 0 ở đầu sẽ bị mất"
-    feedback = agent.evaluate_reflection(q, ans)
-    print("Nhận xét của AI:", feedback)
-    assert "Chính xác" in feedback or "chuẩn" in feedback
+    with patch.object(agent, "_call_gemini", return_value=None):
+        feedback = agent.evaluate_reflection(q, ans)
+        print("Nhận xét của AI (offline fallback):", feedback)
+        assert "Chính xác" in feedback or "chuẩn" in feedback
 
 
 if __name__ == "__main__":

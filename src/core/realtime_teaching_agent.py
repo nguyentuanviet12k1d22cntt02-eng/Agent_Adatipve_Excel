@@ -57,6 +57,22 @@ class RealtimeTeachingAgent:
         index = min(self.session.current_step_index, len(self.lesson.steps) - 1)
         return self.lesson.steps[index]
 
+    @property
+    def needs_ribbon_sensing(self) -> bool:
+        """Kiểm tra xem vi-bước hiện tại có thực sự cần quét cây Ribbon hay không."""
+        step = self.current_step
+        if not step or self.session.status != SessionStatus.OBSERVING:
+            return False
+        actions = self._actions_for_step(step)
+        if not actions:
+            return False
+        index = min(self.session.procedure_action_index, len(actions) - 1)
+        current_kind = actions[index].kind
+        return current_kind in {
+            ProcedureActionKind.RIBBON_TAB,
+            ProcedureActionKind.RIBBON_CONTROL,
+        }
+
     def start_lesson(self, lesson_id: str, now: Optional[float] = None) -> Dict[str, Any]:
         now = time.monotonic() if now is None else float(now)
         self.lesson = get_lesson(lesson_id)

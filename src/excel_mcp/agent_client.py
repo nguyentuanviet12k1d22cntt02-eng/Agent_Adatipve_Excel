@@ -59,7 +59,8 @@ class AITutorMCPAgent:
         """Một chu kỳ Observe → Interpret → Decide → Act → Verify."""
         if self.runtime.session.status == SessionStatus.PAUSED:
             return self.runtime.last_guidance
-        excel_state = excel_get_active_state()
+        needs_ribbon = self.runtime.needs_ribbon_sensing
+        excel_state = excel_get_active_state(needs_ribbon=needs_ribbon)
         mouse_state = mouse_get_telemetry()
         guidance = self.runtime.observe(excel_state, mouse_state)
 

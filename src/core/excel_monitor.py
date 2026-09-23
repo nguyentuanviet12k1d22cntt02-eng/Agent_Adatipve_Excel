@@ -15,6 +15,60 @@ import win32process
 from src.core.excel_ribbon_observer import ExcelRibbonObserver
 
 
+class GeometryCache:
+    """Bộ nhớ đệm hình học ô tính và viewport để tránh gọi COM trùng lặp."""
+
+    def __init__(self, ttl: float = 2.0):
+        self.ttl = ttl
+        self._cache: Dict[tuple, Tuple[Tuple[int, int, int, int], float]] = {}
+
+    def get(self, key: tuple) -> Optional[Tuple[int, int, int, int]]:
+        item = self._cache.get(key)
+        if item is not None:
+            rect, ts = item
+            if time.monotonic() - ts < self.ttl:
+                return rect
+            self._cache.pop(key, None)
+        return None
+
+    def set(self, key: tuple, rect: Optional[Tuple[int, int, int, int]]):
+        if rect:
+            self._cache[key] = (rect, time.monotonic())
+
+    def clear(self):
+        self._cache.clear()
+
+
+class ExcelEventsHandler:
+    """Bộ thu gom sự kiện thời gian thực (Push Events) từ Microsoft Excel COM."""
+
+    def __init__(self):
+        self.callbacks = []
+
+    def add_callback(self, cb):
+        if cb not in self.callbacks:
+            self.callbacks.append(cb)
+
+    def _notify(self, event_name: str, *args):
+        for cb in self.callbacks:
+            try:
+                cb(event_name, *args)
+            except Exception:
+                pass
+
+    def OnSheetSelectionChange(self, Sh, Target):
+        self._notify("SheetSelectionChange", Sh, Target)
+
+    def OnSheetChange(self, Sh, Target):
+        self._notify("SheetChange", Sh, Target)
+
+    def OnWorkbookActivate(self, Wb):
+        self._notify("WorkbookActivate", Wb)
+
+    def OnSheetActivate(self, Sh):
+        self._notify("SheetActivate", Sh)
+
+
 class ExcelMonitor:
     POINTS_PER_INCH = 72.0
     DEFAULT_DPI = 96
@@ -32,6 +86,31 @@ class ExcelMonitor:
         self._exact_rect_cache_key = None
         self._exact_rect_cache = None
         self._ribbon_observer = ExcelRibbonObserver()
+        self._geometry_cache = GeometryCache(ttl=2.0)
+        self._event_sink = None
+        self._event_callbacks = []
+
+    def register_event_callback(self, cb):
+        """Đăng ký callback nhận sự kiện tức thời khi người dùng thao tác trên Excel."""
+        if cb not in self._event_callbacks:
+            self._event_callbacks.append(cb)
+        if self._event_sink is not None and len(self._event_sink) > 1:
+            self._event_sink[1].add_callback(cb)
+
+    def _attach_event_sink(self):
+        """Gắn Event Sink vào Excel.Application để nhận sự kiện đẩy (Event-Driven Push)."""
+        if not self.excel_app:
+            return
+        if self._event_sink is not None:
+            return
+        try:
+            handler = ExcelEventsHandler()
+            sink = win32com.client.WithEvents(self.excel_app, handler)
+            self._event_sink = (sink, handler)
+            for cb in self._event_callbacks:
+                handler.add_callback(cb)
+        except Exception:
+            self._event_sink = None
 
     def connect(self) -> bool:
         """Thử kết nối tới tiến trình Excel đang chạy."""
@@ -40,6 +119,7 @@ class ExcelMonitor:
             app = win32com.client.GetActiveObject("Excel.Application")
             if app and app.Workbooks.Count > 0:
                 self.excel_app = app
+                self._attach_event_sink()
                 return True
         except Exception:
             pass
@@ -112,11 +192,13 @@ class ExcelMonitor:
                         app = excel_win.Application
                         if app and app.Workbooks.Count > 0:
                             self.excel_app = app
+                            self._attach_event_sink()
                             return True
         except Exception:
             pass
 
         self.excel_app = None
+        self._event_sink = None
         return False
 
     def get_cell_rect_by_address(self, cell_address: str, sheet_name: str = "") -> Optional[Tuple[int, int, int, int]]:
@@ -207,6 +289,18 @@ class ExcelMonitor:
                 pass
 
             ws = cell.Worksheet
+            cache_key = (
+                int(self.excel_app.Hwnd),
+                str(ws.Name),
+                str(cell.Address).replace("$", "").upper(),
+                int(win.ScrollColumn),
+                int(win.ScrollRow),
+                float(win.Zoom or 100),
+            )
+            cached = self._geometry_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
             anchor_left, anchor_top = self._get_view_anchor(win, ws, cell)
 
             # PointsToScreenPixelsX/Y có tính trạng thái scroll của document.
@@ -233,12 +327,18 @@ class ExcelMonitor:
             # Fast path: công thức thường đúng khi chưa cuộn. Nếu Excel/Office
             # virtualize tọa độ khác đi sau scroll hoặc khi đổi monitor, dùng
             # RangeFromPoint để hiệu chỉnh lại bằng một cell đang hiển thị thật.
+            final_rect = None
             refined = self._refine_range_rect(win, cell, rect)
             if refined:
-                return refined
-            if self._rect_matches_cell(win, cell, rect):
-                return rect
-            return self._get_calibrated_cell_rect(win, cell, dpi, zoom)
+                final_rect = refined
+            elif self._rect_matches_cell(win, cell, rect):
+                final_rect = rect
+            else:
+                final_rect = self._get_calibrated_cell_rect(win, cell, dpi, zoom)
+
+            if final_rect:
+                self._geometry_cache.set(cache_key, final_rect)
+            return final_rect
         except Exception:
             # Ô ẩn, ngoài màn hình hoặc Excel đang bận/Edit Mode.
             return None
@@ -824,7 +924,7 @@ class ExcelMonitor:
         except Exception:
             return None
 
-    def get_state(self) -> Dict[str, Any]:
+    def get_state(self, needs_ribbon: bool = False) -> Dict[str, Any]:
         """
         Trích xuất toàn bộ trạng thái hiện tại của Excel:
         - workbook: Tên file đang mở
@@ -920,17 +1020,21 @@ class ExcelMonitor:
             hwnd = self.excel_app.Hwnd
             if hwnd:
                 state["excel_rect"] = self._get_physical_window_rect(hwnd)
-                state.update(
-                    self._ribbon_observer.get_state(
-                        int(hwnd),
-                        self.excel_app,
+                # Tối ưu Zero-Lag: Chỉ quét cây Ribbon Accessibility khi vi-bước yêu cầu
+                if needs_ribbon:
+                    state.update(
+                        self._ribbon_observer.get_state(
+                            int(hwnd),
+                            self.excel_app,
+                        )
                     )
-                )
 
             return state
         except Exception as e:
             # Nếu COM bị đứt hoặc Excel đóng
             self.excel_app = None
+            self._event_sink = None
+            self._geometry_cache.clear()
             self._ribbon_observer.reset()
             return state
 

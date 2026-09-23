@@ -68,10 +68,7 @@ class MouseSpeedTracker:
         self.last_hovered_cell = ""
         self.last_hovered_value = None
 
-        # Khởi tạo vị trí ban đầu
-        init_x, init_y = self._query_cursor_pos()
-        self.last_x = init_x
-        self.last_y = init_y
+        self._initialized = False
 
     def _query_cursor_pos(self) -> Tuple[int, int]:
         """Truy vấn tọa độ chuột vật lý toàn màn hình bằng Win32 API."""
@@ -140,17 +137,23 @@ class MouseSpeedTracker:
         :return: Dict chứa toàn bộ telemetry tốc độ và ngữ cảnh
         """
         now = time.perf_counter()
-        dt = now - self.last_time
-
-        # Tránh chia cho 0 nếu gọi quá nhanh
-        if dt <= 0.0001:
-            dt = 0.001
 
         # Lấy tọa độ chuột
         if custom_pos is not None:
             cur_x, cur_y = custom_pos
         else:
             cur_x, cur_y = self._query_cursor_pos()
+
+        if not self._initialized:
+            self.last_x = cur_x
+            self.last_y = cur_y
+            self.last_time = now
+            self._initialized = True
+
+        dt = now - self.last_time
+        # Tránh chia cho 0 nếu gọi quá nhanh
+        if dt <= 0.0001:
+            dt = 0.001
 
         # Tính khoảng cách dịch chuyển Euclide (pixels)
         dx = cur_x - self.last_x
@@ -194,10 +197,21 @@ class MouseSpeedTracker:
         cell_val = None
 
         if is_inside:
-            hovered_cell, cell_val = self.get_cell_under_cursor(cur_x, cur_y)
-            if hovered_cell:
-                self.last_hovered_cell = hovered_cell
-                self.last_hovered_value = cell_val
+            # Tối ưu Zero-Lag: Tuyệt đối không gọi COM RangeFromPoint khi chuột đang di chuyển nhanh.
+            # Chỉ truy vấn khi chuột rê chậm (Precision) hoặc đứng yên (Idle/Hesitating) và có throttle >= 150ms.
+            can_query_com = (
+                self.smoothed_speed <= self.SPEED_THRESHOLDS["PRECISION_MAX"]
+                and (now - getattr(self, "_last_cell_query_time", 0.0)) >= 0.15
+            )
+            if can_query_com:
+                self._last_cell_query_time = now
+                hovered_cell, cell_val = self.get_cell_under_cursor(cur_x, cur_y)
+                if hovered_cell:
+                    self.last_hovered_cell = hovered_cell
+                    self.last_hovered_value = cell_val
+            else:
+                hovered_cell = self.last_hovered_cell
+                cell_val = self.last_hovered_value
 
         # Cập nhật vết cho lần gọi tiếp theo
         self.last_x = cur_x

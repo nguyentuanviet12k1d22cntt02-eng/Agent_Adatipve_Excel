@@ -78,9 +78,9 @@ def excel_get_cell_rect(cell_address: str, sheet_name: str = "") -> Dict[str, An
     name="excel_get_active_state",
     description="Đọc toàn bộ trạng thái làm việc hiện tại của Excel: workbook, sheet, ô đang chọn, giá trị và định dạng ô."
 )
-def excel_get_active_state() -> Dict[str, Any]:
+def excel_get_active_state(needs_ribbon: bool = False) -> Dict[str, Any]:
     """Lấy trạng thái tức thời của Excel."""
-    state = excel_monitor.get_state()
+    state = excel_monitor.get_state(needs_ribbon=needs_ribbon)
     return {
         "connected": state.get("connected", False),
         "workbook": state.get("workbook", ""),
