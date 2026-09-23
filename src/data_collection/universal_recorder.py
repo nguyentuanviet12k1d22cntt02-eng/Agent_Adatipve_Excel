@@ -8,7 +8,7 @@ Dành cho phòng máy trung tâm:
   + Nhập liệu / Gõ công thức hàm (CELL_VALUE_CHANGE, FORMULA_ENTRY)
   + Chuyển đổi Sheet / Mở file (WORKBOOK_OPEN, SHEET_ACTIVATE)
   + Ngập ngừng chuột, dừng thao tác (MOUSE_HESITATION_START/END)
-- Đẩy dữ liệu trực tiếp vào MySQL (và chuẩn bị đồng bộ Supabase Cloud) mà KHÔNG cần phân tích làm phiền học viên.
+- Đẩy dữ liệu trực tiếp vào Supabase Cloud & MySQL mà KHÔNG cần phân tích làm phiền học viên.
 """
 
 import os
@@ -24,7 +24,7 @@ import socket
 import threading
 from typing import Any, Dict, Optional
 
-# Đảm bảo đường dẫn import
+# Thiết lập đường dẫn thư mục gốc
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, ROOT_DIR)
 
@@ -34,6 +34,7 @@ from src.data_collection.db_manager import DatabaseManager
 from src.data_collection.event_logger import EventLogger
 from src.sensors.base_sensor import RawEvent
 from src.sensors.mouse_sensor import MouseSensor
+from src.core.mouse_tracker import MouseSpeedTracker
 
 
 class ExcelAppEvents:
@@ -102,11 +103,13 @@ class UniversalExcelRecorder:
 
         self.db_manager = DatabaseManager()
         self.event_logger = EventLogger(db_manager=self.db_manager, batch_size=5, flush_interval=0.25)
-        self.mouse_sensor = MouseSensor(hesitation_threshold=3.5)
+        self.mouse_tracker = MouseSpeedTracker()
+        self.mouse_sensor = MouseSensor()
 
         self.current_session_id = f"SES_AUTO_{self.student_id}_{int(time.time())}"
         self.current_workbook = "Chua_Mo_File"
         self.current_sheet = "Sheet1"
+        self.current_cell = ""
 
         self._running = False
         self._excel_hooked = False
@@ -133,7 +136,7 @@ class UniversalExcelRecorder:
         print("   - Trạng thái: Đang theo dõi Excel ngầm...")
         print("   👉 Học viên CỨ MỞ BẤT KỲ FILE EXCEL NÀO VÀ LÀM BÀI BÌNH THƯỜNG!")
         print("   - Không cần chọn bài, không hiển thị gợi ý làm phiền.")
-        print("   - Toàn bộ thao tác chọn ô, nhập dữ liệu, gõ hàm đều được ghi vào MySQL.")
+        print("   - Toàn bộ thao tác chọn ô, nhập dữ liệu, gõ hàm đều được ghi vào Database.")
         print("=" * 80)
 
         # Khởi động luồng COM quan sát Excel
@@ -161,6 +164,22 @@ class UniversalExcelRecorder:
                 conn.close()
             except Exception as e:
                 print(f"[Recorder] Lỗi đăng ký học viên: {e}")
+
+        if self.db_manager.supabase_available:
+            try:
+                conn = self.db_manager.get_supabase_connection()
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO public.students (student_id, name, created_at)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (student_id) DO UPDATE SET name = EXCLUDED.name;
+                        """,
+                        (self.student_id, self.student_name, now_dt),
+                    )
+                conn.close()
+            except Exception as e:
+                pass
 
     def _com_monitor_loop(self):
         """Vòng lặp liên tục kiểm tra và hook vào Excel bất cứ khi nào nó được bật."""
@@ -210,10 +229,22 @@ class UniversalExcelRecorder:
         """Theo dõi chuyển động chuột để phát hiện ngập ngừng."""
         while self._running:
             try:
-                events = self.mouse_sensor.tick()
+                mouse_state = self.mouse_tracker.update()
+                # Nếu chuột đứng yên >= 3.5s -> đánh dấu ngập ngừng
+                idle_dur = mouse_state.get("idle_duration", 0.0)
+                if idle_dur >= 3.5:
+                    mouse_state["is_hesitating"] = True
+
+                events = self.mouse_sensor._do_detect(
+                    excel_state={"cell_clean_address": self.current_cell},
+                    mouse_state=mouse_state,
+                    context={
+                        "session_id": self.current_session_id,
+                        "lesson_id": self.current_workbook,
+                        "step_index": 0,
+                    },
+                )
                 for ev in events:
-                    ev.session_id = self.current_session_id
-                    ev.lesson_id = self.current_workbook
                     self.event_logger.log_event(ev)
             except Exception:
                 pass
@@ -241,6 +272,7 @@ class UniversalExcelRecorder:
     def record_selection(self, wb_name: str, sheet_name: str, cell_address: str):
         self.current_workbook = wb_name
         self.current_sheet = sheet_name
+        self.current_cell = cell_address
         print(f"👉 [CHỌN Ô]: [{cell_address}] (Sheet: {sheet_name}, File: {wb_name})")
         ev = RawEvent(
             event_type="CELL_SELECTION",
@@ -254,6 +286,7 @@ class UniversalExcelRecorder:
     def record_cell_change(self, wb_name: str, sheet_name: str, cell_address: str, val: Any, formula: Any):
         self.current_workbook = wb_name
         self.current_sheet = sheet_name
+        self.current_cell = cell_address
 
         is_formula = isinstance(formula, str) and formula.startswith("=")
         event_type = "FORMULA_ENTRY" if is_formula else "CELL_VALUE_CHANGE"
