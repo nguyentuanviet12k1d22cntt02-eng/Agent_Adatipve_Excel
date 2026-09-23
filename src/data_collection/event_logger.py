@@ -41,40 +41,85 @@ class EventLogger:
 
     def start_session(self, session_id: str, student_id: str = "DEFAULT_STUDENT", lesson_id: str = ""):
         """Khởi tạo phiên học mới trong CSDL."""
+        now = time.time()
+        now_dt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
+        if self.db_manager.mysql_available:
+            try:
+                conn = self.db_manager.get_mysql_connection()
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO students (student_id, name, created_at)
+                        VALUES (%s, %s, %s)
+                        ON DUPLICATE KEY UPDATE name=VALUES(name);
+                        """,
+                        (student_id, f"Student {student_id}", now_dt),
+                    )
+                    cursor.execute(
+                        """
+                        INSERT INTO sessions (session_id, student_id, lesson_id, started_at, status)
+                        VALUES (%s, %s, %s, %s, 'IN_PROGRESS')
+                        ON DUPLICATE KEY UPDATE status='IN_PROGRESS';
+                        """,
+                        (session_id, student_id, lesson_id, now_dt),
+                    )
+                conn.close()
+                return
+            except Exception as e:
+                print(f"[EventLogger] Lỗi MySQL start_session: {e}")
+
         try:
-            with self.db_manager.get_connection() as conn:
-                # Đảm bảo student tồn tại
+            with self.db_manager.get_sqlite_connection() as conn:
                 conn.execute(
                     "INSERT OR IGNORE INTO students (student_id, name, created_at) VALUES (?, ?, ?);",
-                    (student_id, f"Student {student_id}", time.time()),
+                    (student_id, f"Student {student_id}", now),
                 )
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO sessions (session_id, student_id, lesson_id, started_at, status)
                     VALUES (?, ?, ?, ?, 'IN_PROGRESS');
                     """,
-                    (session_id, student_id, lesson_id, time.time()),
+                    (session_id, student_id, lesson_id, now),
                 )
                 conn.commit()
         except Exception as e:
-            print(f"[EventLogger] Lỗi khởi tạo session: {e}")
+            print(f"[EventLogger] Lỗi SQLite start_session: {e}")
 
     def end_session(self, session_id: str, status: str = "COMPLETED", total_steps: int = 0, completed_steps: int = 0):
         """Cập nhật kết thúc phiên học."""
         self.flush()
+        now = time.time()
+        now_dt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
+        if self.db_manager.mysql_available:
+            try:
+                conn = self.db_manager.get_mysql_connection()
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE sessions
+                        SET ended_at = %s, status = %s, total_steps = %s, completed_steps = %s
+                        WHERE session_id = %s;
+                        """,
+                        (now_dt, status, total_steps, completed_steps, session_id),
+                    )
+                conn.close()
+                return
+            except Exception as e:
+                print(f"[EventLogger] Lỗi MySQL end_session: {e}")
+
         try:
-            with self.db_manager.get_connection() as conn:
+            with self.db_manager.get_sqlite_connection() as conn:
                 conn.execute(
                     """
                     UPDATE sessions
                     SET ended_at = ?, status = ?, total_steps = ?, completed_steps = ?
                     WHERE session_id = ?;
                     """,
-                    (time.time(), status, total_steps, completed_steps, session_id),
+                    (now, status, total_steps, completed_steps, session_id),
                 )
                 conn.commit()
         except Exception as e:
-            print(f"[EventLogger] Lỗi cập nhật session kết thúc: {e}")
+            print(f"[EventLogger] Lỗi SQLite end_session: {e}")
 
     def flush(self):
         """Ghi cưỡng bức toàn bộ sự kiện còn lại trong hàng đợi xuống đĩa."""

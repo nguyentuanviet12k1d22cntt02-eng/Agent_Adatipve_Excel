@@ -119,7 +119,7 @@ class TestPhase1DataCollection(unittest.TestCase):
             temp_db_path = tf.name
 
         try:
-            db_mgr = DatabaseManager(db_path=temp_db_path)
+            db_mgr = DatabaseManager(use_mysql=False, db_path=temp_db_path)
             logger = EventLogger(db_manager=db_mgr, batch_size=5, flush_interval=0.1)
 
             session_id = "SES_TEST_999"

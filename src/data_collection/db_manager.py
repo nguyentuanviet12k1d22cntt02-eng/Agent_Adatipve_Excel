@@ -1,52 +1,90 @@
 """
-Database Manager: Quản trị kết nối cơ sở dữ liệu SQLite cục bộ phục vụ thu thập dữ liệu học tập.
-Bật chế độ WAL (Write-Ahead Logging) để hỗ trợ đọc/ghi đồng thời với hiệu năng tối đa.
+Database Manager: Quản trị kết nối cơ sở dữ liệu MySQL (chính) và SQLite (dự phòng).
+Hỗ trợ ghi nhận dòng sự kiện tương tác, phiên học, nhãn và đặc trưng hành vi người học.
 """
 
 import json
 import os
 import sqlite3
+import time
 from typing import Any, Dict, List, Optional
+import pymysql
+
+from src.config.db_config import (
+    MYSQL_HOST,
+    MYSQL_PORT,
+    MYSQL_USER,
+    MYSQL_PASSWORD,
+    MYSQL_DATABASE,
+    SQLITE_DB_PATH,
+)
 
 
 class DatabaseManager:
-    DEFAULT_DB_PATH = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "data",
-        "excel_tutor.db",
-    )
+    def __init__(self, use_mysql: bool = True, db_path: Optional[str] = None):
+        self.use_mysql = use_mysql
+        self.sqlite_path = db_path or SQLITE_DB_PATH
+        os.makedirs(os.path.dirname(self.sqlite_path), exist_ok=True)
 
-    def __init__(self, db_path: Optional[str] = None):
-        self.db_path = db_path or self.DEFAULT_DB_PATH
-        # Đảm bảo thư mục cha tồn tại
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        self._init_database()
+        # Kiểm tra kết nối MySQL
+        self.mysql_available = False
+        if self.use_mysql:
+            try:
+                conn = self.get_mysql_connection()
+                conn.close()
+                self.mysql_available = True
+            except Exception as e:
+                print(f"[DatabaseManager] Không thể kết nối MySQL ({e}). Tự động fallback sang SQLite.")
+                self.mysql_available = False
 
-    def get_connection(self) -> sqlite3.Connection:
+        if not self.mysql_available:
+            self._init_sqlite()
+
+    def get_mysql_connection(self):
+        """Tạo kết nối tới máy chủ MySQL."""
+        return pymysql.connect(
+            host=MYSQL_HOST,
+            port=MYSQL_PORT,
+            user=MYSQL_USER,
+            password=MYSQL_PASSWORD,
+            database=MYSQL_DATABASE,
+            charset="utf8mb4",
+            cursorclass=pymysql.cursors.DictCursor,
+            autocommit=True,
+            connect_timeout=3,
+        )
+
+    def get_sqlite_connection(self) -> sqlite3.Connection:
         """Tạo kết nối SQLite an toàn với WAL mode."""
-        conn = sqlite3.connect(self.db_path, timeout=10.0)
+        conn = sqlite3.connect(self.sqlite_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         return conn
 
-    def _init_database(self):
-        """Khởi tạo cấu trúc các bảng theo tài liệu thiết kế."""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
+    def get_connection(self):
+        """Trả về kết nối khả dụng (Ưu tiên MySQL, fallback SQLite)."""
+        if self.mysql_available:
+            try:
+                return self.get_mysql_connection()
+            except Exception:
+                pass
+        return self.get_sqlite_connection()
 
-            # 1. Bảng học viên (Students)
+    def _init_sqlite(self):
+        """Khởi tạo cấu trúc các bảng cho SQLite khi ở chế độ fallback."""
+        with self.get_sqlite_connection() as conn:
+            cursor = conn.cursor()
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS students (
                     student_id TEXT PRIMARY KEY,
                     name TEXT,
+                    email TEXT,
                     created_at REAL
                 );
                 """
             )
-
-            # 2. Bảng phiên học (Sessions)
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS sessions (
@@ -57,13 +95,10 @@ class DatabaseManager:
                     ended_at REAL,
                     status TEXT,
                     total_steps INTEGER DEFAULT 0,
-                    completed_steps INTEGER DEFAULT 0,
-                    FOREIGN KEY(student_id) REFERENCES students(student_id)
+                    completed_steps INTEGER DEFAULT 0
                 );
                 """
             )
-
-            # 3. Bảng dòng sự kiện thô (Events)
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS events (
@@ -75,47 +110,60 @@ class DatabaseManager:
                     lesson_id TEXT,
                     step_index INTEGER,
                     cell TEXT,
-                    metadata TEXT,
-                    FOREIGN KEY(session_id) REFERENCES sessions(session_id)
+                    metadata TEXT
                 );
                 """
             )
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);")
-
-            # 4. Bảng dự đoán trạng thái của ML (Predictions)
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS predictions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id TEXT,
-                    timestamp REAL,
-                    state TEXT,
-                    confidence REAL,
-                    model_version TEXT,
-                    FOREIGN KEY(session_id) REFERENCES sessions(session_id)
-                );
-                """
-            )
-
             conn.commit()
 
     def insert_events_batch(self, events: List[Dict[str, Any]]):
-        """Ghi hàng loạt sự kiện vào database theo batch tối ưu I/O."""
+        """Ghi hàng loạt sự kiện vào MySQL hoặc SQLite."""
         if not events:
             return
 
-        with self.get_connection() as conn:
+        if self.mysql_available:
+            try:
+                conn = self.get_mysql_connection()
+                with conn.cursor() as cursor:
+                    rows = [
+                        (
+                            e.get("session_id", ""),
+                            float(e.get("timestamp", time.time())),
+                            str(e.get("iso_time", "")),
+                            str(e.get("event_type", "")),
+                            str(e.get("lesson_id", "")),
+                            int(e.get("step_index", 0)),
+                            str(e.get("cell", "")),
+                            json.dumps(e.get("metadata", {}), ensure_ascii=False),
+                        )
+                        for e in events
+                    ]
+                    cursor.executemany(
+                        """
+                        INSERT INTO events (session_id, timestamp, iso_time, event_type, lesson_id, step_index, cell, metadata)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                        """,
+                        rows,
+                    )
+                conn.close()
+                return
+            except Exception as e:
+                print(f"[DatabaseManager] Lỗi ghi MySQL ({e}). Ghi tạm vào SQLite.")
+
+        # Fallback SQLite
+        with self.get_sqlite_connection() as conn:
             cursor = conn.cursor()
             rows = [
                 (
                     e.get("session_id", ""),
-                    e.get("timestamp", 0.0),
-                    e.get("iso_time", ""),
-                    e.get("event_type", ""),
-                    e.get("lesson_id", ""),
-                    e.get("step_index", 0),
-                    e.get("cell", ""),
+                    float(e.get("timestamp", time.time())),
+                    str(e.get("iso_time", "")),
+                    str(e.get("event_type", "")),
+                    str(e.get("lesson_id", "")),
+                    int(e.get("step_index", 0)),
+                    str(e.get("cell", "")),
                     json.dumps(e.get("metadata", {}), ensure_ascii=False),
                 )
                 for e in events

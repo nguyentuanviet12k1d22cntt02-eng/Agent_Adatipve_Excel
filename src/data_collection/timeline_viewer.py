@@ -14,11 +14,30 @@ class TimelineViewer:
 
     def list_recent_sessions(self, limit: int = 10) -> List[dict]:
         """Liệt kê các phiên học gần nhất."""
-        with self.db.get_connection() as conn:
+        if self.db.mysql_available:
+            try:
+                conn = self.db.get_mysql_connection()
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT session_id, student_id, lesson_id, started_at, status, completed_steps, total_steps
+                        FROM sessions
+                        ORDER BY started_at DESC
+                        LIMIT %s;
+                        """,
+                        (limit,),
+                    )
+                    rows = cursor.fetchall()
+                conn.close()
+                return [dict(r) for r in rows]
+            except Exception as e:
+                print(f"[TimelineViewer] Lỗi MySQL: {e}")
+
+        with self.db.get_sqlite_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT session_id, student_id, lesson_id, started_at, status, completed_steps
+                SELECT session_id, student_id, lesson_id, started_at, status, completed_steps, total_steps
                 FROM sessions
                 ORDER BY started_at DESC
                 LIMIT ?;
@@ -29,7 +48,35 @@ class TimelineViewer:
 
     def get_session_events(self, session_id: str) -> List[dict]:
         """Lấy toàn bộ dòng sự kiện của một session."""
-        with self.db.get_connection() as conn:
+        if self.db.mysql_available:
+            try:
+                conn = self.db.get_mysql_connection()
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id, timestamp, iso_time, event_type, lesson_id, step_index, cell, metadata
+                        FROM events
+                        WHERE session_id = %s
+                        ORDER BY id ASC;
+                        """,
+                        (session_id,),
+                    )
+                    raw_rows = cursor.fetchall()
+                conn.close()
+                rows = []
+                for r in raw_rows:
+                    d = dict(r)
+                    if isinstance(d.get("metadata"), str):
+                        try:
+                            d["metadata"] = json.loads(d["metadata"])
+                        except Exception:
+                            pass
+                    rows.append(d)
+                return rows
+            except Exception as e:
+                print(f"[TimelineViewer] Lỗi MySQL: {e}")
+
+        with self.db.get_sqlite_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
@@ -43,10 +90,11 @@ class TimelineViewer:
             rows = []
             for r in cursor.fetchall():
                 d = dict(r)
-                try:
-                    d["metadata"] = json.loads(d["metadata"])
-                except Exception:
-                    pass
+                if isinstance(d.get("metadata"), str):
+                    try:
+                        d["metadata"] = json.loads(d["metadata"])
+                    except Exception:
+                        pass
                 rows.append(d)
             return rows
 
