@@ -101,11 +101,12 @@ class TestZeroLagArchitecture(unittest.TestCase):
         monitor = ExcelMonitor()
         monitor._ribbon_observer = MagicMock()
 
-        # Khi không có kết nối Excel
-        state = monitor.get_state(needs_ribbon=False)
-        self.assertFalse(state["connected"])
-        self.assertFalse(state["ribbon_available"])
-        monitor._ribbon_observer.get_state.assert_not_called()
+        # Mock connect để bài test độc lập với việc Excel ngoài máy tính có đang mở hay không
+        with patch.object(monitor, "connect", return_value=False):
+            state = monitor.get_state(needs_ribbon=False)
+            self.assertFalse(state["connected"])
+            self.assertFalse(state["ribbon_available"])
+            monitor._ribbon_observer.get_state.assert_not_called()
 
 
 if __name__ == "__main__":
